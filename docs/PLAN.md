@@ -78,7 +78,7 @@ Account ──(default space)──► Space ◄──(rules, then AI suggestion
 ## 3. Architecture
 
 ```
-┌─────────────────────────────────── VPS (later: home server) ────────────────────────────────────┐
+┌──────────────────────────────────── VPS (later: home server) ────────────────────────────────────┐
 │                                                                                                   │
 │  Caddy (HTTPS) ─► Next.js app (UI + API) ──── SQLite (WAL) + FTS5 ──── Sync worker (Node)         │
 │                        │                         ▲                      ├─ IMAP IDLE (iCloud, OVH) │
