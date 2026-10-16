@@ -78,14 +78,14 @@ Account ──(default space)──► Space ◄──(rules, then AI suggestion
 ## 3. Architecture
 
 ```
-┌───────────────────────────────────── VPS (later: home server) ────────────────────────────────────┐
+┌─────────────────────────────────── VPS (later: home server) ────────────────────────────────────┐
 │                                                                                                   │
 │  Caddy (HTTPS) ─► Next.js app (UI + API) ──── SQLite (WAL) + FTS5 ──── Sync worker (Node)         │
 │                        │                         ▲                      ├─ IMAP IDLE (iCloud, OVH) │
 │                        │ Web Push               │                      ├─ SMTP send + outbox      │
-│                        ▼                         │                      └─ AI triage queue ──► AI API│
+│                        ▼                         │                      └─ AI triage queue ──► AI API
 │        iPhone (home-screen app) · Mac/PC (installed app, later Tauri)                             │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 | Layer | Choice | Why |
