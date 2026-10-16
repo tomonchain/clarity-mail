@@ -39,11 +39,11 @@ const STYLE = [
   "white-space",
 ];
 
-const safeStyle = [/^[\w\s%#.,()\-/'\":]+$/];
+const safeStyle = [/^[\w\s%#.,()\-/'":]+$/];
 
 /** Keep the layout of an HTML mail and drop scripts, forms, and remote-active content. */
 export function cleanMailHtml(input: string) {
-  return sanitizeHtml(input.replaceAll("\\u0000", "").slice(0, 200_000), {
+  return sanitizeHtml(input.replaceAll("\u0000", "").slice(0, 200_000), {
     allowedTags: sanitizeHtml.defaults.allowedTags.concat([
       "img",
       "h1",
