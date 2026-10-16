@@ -1,0 +1,16 @@
+services:
+  sorted:
+    build: .
+    ports:
+      - "4317:4317"
+    env_file:
+      - .env
+    environment:
+      SORTED_DATA_DIR: /data
+      SORTED_SECURE_COOKIE: "1"
+    volumes:
+      - sorted-data:/data
+    restart: unless-stopped
+
+volumes:
+  sorted-data:
