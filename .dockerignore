@@ -1,0 +1,13 @@
+node_modules
+.next
+.next-desktop
+desktop/node_modules
+desktop/staging
+desktop/dist
+desktop/cache
+data
+.git
+*.md
+.env
+.env.*
+!.env.example

@@ -1,0 +1,19 @@
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ sqlite3 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+ENV NODE_ENV=production
+ENV SORTED_DATA_DIR=/data
+ENV SORTED_SECURE_COOKIE=1
+ENV PORT=4317
+EXPOSE 4317
+
+CMD ["npm", "start"]
