@@ -409,7 +409,7 @@
     "node_modules/node-abi": {
       "version": "4.38.0",
       "resolved": "https://registry.npmjs.org/node-abi/-/node-abi-4.38.0.tgz",
-      "integrity": "sha512-suSdznUPfabdaeLiNERA0LHod14RhcEn8wMPUZEQ6bKvajUCZ+aizY4pIvlLU+gImeLKp2bFDHhOc9JdQKmthOw==",
+      "integrity": "sha512-suSdznUPfabdaeLiNERA0LHod14RhcEn8wMPUZEQ6bKvajUCZ+aizY4pIvlLU+gImeLKp2bFDHhOc9yonISsXw==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
