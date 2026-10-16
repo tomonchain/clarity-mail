@@ -185,7 +185,7 @@
     "node_modules/@esbuild/android-arm64": {
       "version": "0.28.2",
       "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.2.tgz",
-      "integrity": "sha512-5YfKeeI8qWfBZIX+xay6wSAcg9DDD7K9RLKZEBOMZm3ckNpJBvOX20tSfby8KfrrhINDyv9V2YVZKY/SpoGJI8w==",
+      "integrity": "sha512-5YfKeeI8qWfBZIX+u2xZC3Zlb3Os/gLS2sbEKM+I4ZOcsWmHS2WLysCcQZDAFRslDUU5Oiq44gf6PYN1vGwG5A==",
       "cpu": [
         "arm64"
       ],
@@ -389,7 +389,7 @@
     "node_modules/@esbuild/linux-riscv64": {
       "version": "0.28.2",
       "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.28.2.tgz",
-      "integrity": "sha512-GeXCej4IQtU1B+QlDV6M/RRvbzI3O/Stss+/bCXv4lZls5WGRtu2a+3JkA3i4qIUlMXpcHebWpF8AkJhATowuA==",
+      "integrity": "sha512-GeXCej4IQtU1B+QlDV8W/RRvbzI3O/Stss+/bCXv4lZls5WGRtu2a+3JkA3i4qIUlMXpcHebWpF8AkJhATowuA==",
       "cpu": [
         "riscv64"
       ],
