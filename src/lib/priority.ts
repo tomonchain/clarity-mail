@@ -21,7 +21,7 @@ export function whyLine(reasons: PriorityReason[]): string | null {
   return notable
     .slice(0, 2)
     .map((reason) => reason.label)
-    .join(" \u00b7 ");
+    .join(" · ");
 }
 
 function isInFocusHours(space: Space, now: Date): boolean {
