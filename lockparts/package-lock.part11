@@ -205,7 +205,7 @@
     "node_modules/is-shared-array-buffer": {
       "version": "1.0.4",
       "resolved": "https://registry.npmjs.org/is-shared-array-buffer/-/is-shared-array-buffer-1.0.4.tgz",
-      "integrity": "sha512-ISWac8drv4ZGfwKl5slpHG9OwPNty4jOWPRIhBpxOoD+hqITiwuipOQ2TnNqHNI1/zSt0hlo0crG8Jw==",
+      "integrity": "sha512-ISWac8drv4ZGfwKl5slpHG9OwPNty4jOWPRIhBpxOoD+hqITiwuipOQ2bNthAzwA3B4fIjO4Nln74N0S9byq8A==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
