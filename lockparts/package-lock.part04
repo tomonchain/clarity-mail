@@ -167,7 +167,7 @@
     "node_modules/@types/nodemailer": {
       "version": "8.0.2",
       "resolved": "https://registry.npmjs.org/@types/nodemailer/-/nodemailer-8.0.2.tgz",
-      "integrity": "sha512-c7M5ox8p0nEOfbJ2EQcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==",
+      "integrity": "sha512-c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
@@ -206,7 +206,7 @@
     "node_modules/@types/sanitize-html/node_modules/dom-serializer": {
       "version": "3.1.1",
       "resolved": "https://registry.npmjs.org/dom-serializer/-/dom-serializer-3.1.1.tgz",
-      "integrity": "sha512-4MEa38/QexBob6gFNwu+EGdWvhJ2OKuNwdYY3Y3NyeWDQfnGeDYQUDfIRzWu5B5gsv03so2Uxd28YC6zrsx3Lw==",
+      "integrity": "sha512-4MEa38/QexBob6gFNwu+EGdWvhJ1OKuNwdYY3Y3NyeWDQfnGeDYQUDfIRzWu5B5gsv03so2Uxd28YC6zrsx3Lw==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
@@ -258,7 +258,7 @@
     "node_modules/@types/sanitize-html/node_modules/domutils": {
       "version": "4.0.2",
       "resolved": "https://registry.npmjs.org/domutils/-/domutils-4.0.2.tgz",
-      "integrity": "sha512-qI4JLRKnSzqFqr7hAlS5xQDusBCjKSEG4t4+7MklTvighcCPPZC7ynWyjdTA==",
+      "integrity": "sha512-qI4JLRKnSzqFqr7hAlS5xQDusBCjKSEG4t4+7aNrIQMHBcsC2TGEhuyABJdYkgSewL57PNLYEiibY2iPKhKpaA==",
       "dev": true,
       "license": "BSD-2-Clause",
       "dependencies": {
@@ -589,7 +589,7 @@
     "node_modules/@typescript-eslint/visitor-keys": {
       "version": "8.71.1",
       "resolved": "https://registry.npmjs.org/@typescript-eslint/visitor-keys/-/visitor-keys-8.71.1.tgz",
-      "integrity": "sha512-0GxiUGqMU0qXJt58cBsiG3DP8lUmBaFo2vChtUX+CT7PnR3v/VGLLrzVP4K9r1lNiZjHYefMBbPunplr09v6w==",
+      "integrity": "sha512-0GxiUGqMU0qXJt58cBsiG3DP8lUmBaFo2vChtUX+CT7PnR3v/VGLLrzVP4K9r1lNiZXjHYefMBbPunplr09v6w==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
