@@ -1,4 +1,4 @@
-coding-japanese", {
+coding-japanese": {
       "version": "2.4.0",
       "resolved": "https://registry.npmjs.org/encoding-japanese/-/encoding-japanese-2.4.0.tgz",
       "integrity": "sha512-PE0KjlsDy9JSsoU4C2Q8NXb1kC4c+bZRac9ZvHXUE4q1Ht63gScKMdEy9jst9+Fi3M4eDkqzkEhBZvix4blP2A==",
@@ -583,7 +583,7 @@ coding-japanese", {
     "node_modules/eslint-plugin-react": {
       "version": "7.37.5",
       "resolved": "https://registry.npmjs.org/eslint-plugin-react/-/eslint-plugin-react-7.37.5.tgz",
-      "integrity": "sha512-Qteup0SqU15kdocexFNAJMvCJEfa2xUKNV4CC1xsVMrIIqEy3SQ/rqyxCWNzfrd3/ldy6HMlD2e0JDVpDg2qIA==",
+      "integrity": "sha512-Qteup0SqU15kdocexFNAJMvCJEfa2xUKNV4CC1xsVMrIIqEy3SQ/rqyxCWNzfrd3/ldy6HLmD2e0JDVpDg2qIA==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
