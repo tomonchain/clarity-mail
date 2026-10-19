@@ -101,6 +101,7 @@ export function readState(): {
         : looksLikeHtml(msg.body)
           ? cleanMailHtml(msg.body)
           : undefined,
+      folder: msg.role ?? "other",
     })),
   }));
 

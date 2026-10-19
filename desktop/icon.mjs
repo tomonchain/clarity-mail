@@ -1,8 +1,5 @@
 import { deflateSync } from "node:zlib";
 
-const PAPER = [0xf7, 0xf6, 0xf3, 255];
-const INK = [0x2c, 0x28, 0x24, 255];
-
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n += 1) {
@@ -36,36 +33,60 @@ function inRoundRect(px, py, bar) {
   return dx * dx + dy * dy <= bar.r * bar.r;
 }
 
+// The Clarity mark: three settling white lines on a deep blue tile, on the macOS icon grid
+// (824/1024 body, ~22% corner radius), anti-aliased by 4x4 supersampling.
+const TOP = [0x5b, 0x9b, 0xff];
+const BOTTOM = [0x27, 0x45, 0xb8];
+
 export function iconPng(size) {
-  const stroke = Math.max(1, Math.round(size * 0.09));
-  const inset = size * 0.2;
-  const lines = [0.32, 0.5, 0.68];
-  const widths = [1, 0.62, 0.36];
-  const bars = lines.map((y, i) => ({
-    x: inset,
-    y: size * y - stroke / 2,
-    w: (size - inset * 2) * widths[i],
+  const margin = size * (100 / 1024);
+  const body = size - margin * 2;
+  const tile = { x: margin, y: margin, w: body, h: body, r: body * 0.225 };
+  // Same geometry as the in-app LogoMark: glyph is 62% of the tile, on a 32-unit grid.
+  const unit = (body * 0.62) / 32;
+  const gx = margin + body * 0.19;
+  const stroke = 3.2 * unit;
+  const bars = [
+    [10.5, 6, 26],
+    [16, 6, 19],
+    [21.5, 6, 13.5],
+  ].map(([cy, x1, x2]) => ({
+    x: gx + (x1 - stroke / unit / 2) * unit,
+    y: gx + cy * unit - stroke / 2,
+    w: (x2 - x1) * unit + stroke,
     h: stroke,
     r: stroke / 2,
   }));
+  const S = 4;
   const stride = size * 4 + 1;
   const raw = Buffer.alloc(stride * size);
   for (let y = 0; y < size; y += 1) {
     const row = y * stride;
     raw[row] = 0;
     for (let x = 0; x < size; x += 1) {
-      let color = PAPER;
-      for (const bar of bars) {
-        if (inRoundRect(x + 0.5, y + 0.5, bar)) {
-          color = INK;
-          break;
+      let inTile = 0;
+      let inBar = 0;
+      for (let sy = 0; sy < S; sy += 1) {
+        for (let sx = 0; sx < S; sx += 1) {
+          const px = x + (sx + 0.5) / S;
+          const py = y + (sy + 0.5) / S;
+          if (!inRoundRect(px, py, tile)) continue;
+          inTile += 1;
+          if (bars.some((bar) => inRoundRect(px, py, bar))) inBar += 1;
         }
       }
       const offset = row + 1 + x * 4;
-      raw[offset] = color[0];
-      raw[offset + 1] = color[1];
-      raw[offset + 2] = color[2];
-      raw[offset + 3] = color[3];
+      if (inTile === 0) {
+        raw[offset + 3] = 0;
+        continue;
+      }
+      const t = Math.min(1, Math.max(0, ((x - margin) + (y - margin)) / (body * 2)));
+      const mix = inBar / inTile;
+      for (let c = 0; c < 3; c += 1) {
+        const bg = TOP[c] + (BOTTOM[c] - TOP[c]) * t;
+        raw[offset + c] = Math.round(bg + (255 - bg) * mix);
+      }
+      raw[offset + 3] = Math.round((255 * inTile) / (S * S));
     }
   }
   const ihdr = Buffer.alloc(13);

@@ -4,6 +4,11 @@ import { sessionValid } from "./auth";
 export const SESSION_COOKIE = "sorted_session";
 const MONTH = 30 * 24 * 60 * 60;
 
+/** The Mac app sets CLARITY_DESKTOP=1 for its local server. */
+export function isDesktop() {
+  return process.env.CLARITY_DESKTOP === "1";
+}
+
 export function sessionCookie(request: Request, maxAge = MONTH) {
   const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
   const origin = request.headers.get("origin") ?? "";
@@ -28,18 +33,30 @@ export function sessionCookie(request: Request, maxAge = MONTH) {
       partitioned: true as const,
     };
   }
+  // In the Mac app the session ends when the app quits, so every launch starts locked.
+  const desktopSession = isDesktop() && maxAge > 0;
   return {
     httpOnly: true,
     path: "/",
-    maxAge,
+    ...(desktopSession ? {} : { maxAge }),
     secure,
-    sameSite: "lax" as const,
+    sameSite: isDesktop() ? ("strict" as const) : ("lax" as const),
   };
 }
 
-export async function readSession(): Promise<string | null> {
+export async function readToken(): Promise<string | null> {
   const jar = await cookies();
-  const token = jar.get(SESSION_COOKIE)?.value;
+  return jar.get(SESSION_COOKIE)?.value ?? null;
+}
+
+export async function readSession(): Promise<string | null> {
+  const token = await readToken();
   if (!sessionValid(token)) return null;
-  return token ?? null;
+  return token;
+}
+
+/** The first address in X-Forwarded-For, only where a trusted proxy sets it. */
+export function clientKey(request: Request) {
+  if (process.env.VERCEL !== "1" && process.env.SORTED_TRUST_PROXY !== "1") return "local";
+  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
 }

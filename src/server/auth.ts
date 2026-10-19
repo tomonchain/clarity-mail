@@ -1,43 +1,79 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
-import { encryptionKey, hashPassword, verifyPassword } from "./crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { hashPassword, passwordNeedsRehash, verifyPassword } from "./crypto";
 import { getDb, hasUser } from "./db";
 
-const MONTH = 30 * 24 * 60 * 60 * 1000;
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function createUser(password: string) {
   if (hasUser()) throw new Error("Clarity Mail is already set up.");
-  if (password.length < 8) throw new Error("Use at least 8 characters.");
+  checkStrength(password);
   getDb()
     .prepare("INSERT INTO user (id, password_hash, created_at) VALUES (1, ?, ?)")
     .run(hashPassword(password), Date.now());
 }
 
-function sign(exp: number) {
-  const body = `v1.${exp}`;
-  const mac = createHmac("sha256", encryptionKey()).update(body).digest("base64url");
-  return `${body}.${mac}`;
+function checkStrength(password: string) {
+  if (password.length < 8) throw new Error("Use at least 8 characters.");
+  if (password.length > 512) throw new Error("Use at most 512 characters.");
 }
 
-export function startSession(password: string): string | null {
+/** Sessions are random tokens. Only their hash is stored, so a copy of the mailbox cannot sign anyone in. */
+function digest(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export function issueSession(): string {
+  const token = randomBytes(32).toString("base64url");
+  const db = getDb();
+  const now = Date.now();
+  db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(now);
+  db.prepare("INSERT INTO sessions (token, expires_at) VALUES (?, ?)").run(digest(token), now + SESSION_TTL_MS);
+  return token;
+}
+
+function storedHash(): string | null {
   const row = getDb().prepare("SELECT password_hash FROM user WHERE id = 1").get() as
     | { password_hash: string }
     | undefined;
-  if (!row || !verifyPassword(password, row.password_hash)) return null;
-  return sign(Date.now() + MONTH);
+  return row?.password_hash ?? null;
+}
+
+export function checkPassword(password: string): boolean {
+  const stored = storedHash();
+  if (!stored || password.length > 512 || !verifyPassword(password, stored)) return false;
+  if (passwordNeedsRehash(stored)) {
+    getDb().prepare("UPDATE user SET password_hash = ? WHERE id = 1").run(hashPassword(password));
+  }
+  return true;
+}
+
+export function startSession(password: string): string | null {
+  if (!checkPassword(password)) return null;
+  return issueSession();
 }
 
 export function sessionValid(token: string | undefined | null): boolean {
-  if (!token) return false;
-  const [version, expText, mac] = token.split(".");
-  if (version !== "v1" || !expText || !mac) return false;
-  const exp = Number(expText);
-  if (!Number.isFinite(exp) || exp < Date.now()) return false;
-  const expected = createHmac("sha256", encryptionKey()).update(`${version}.${expText}`).digest("base64url");
-  const got = Buffer.from(mac);
-  const want = Buffer.from(expected);
-  return got.length === want.length && timingSafeEqual(got, want);
+  if (!token || token.length > 200) return false;
+  const row = getDb().prepare("SELECT expires_at FROM sessions WHERE token = ?").get(digest(token)) as
+    | { expires_at: number }
+    | undefined;
+  return Boolean(row && row.expires_at > Date.now());
 }
 
-export function endSession(_token: string) {}
+export function endSession(token: string) {
+  getDb().prepare("DELETE FROM sessions WHERE token = ?").run(digest(token));
+}
+
+/** Sign out every window and device, except the session given. */
+export function endOtherSessions(keep: string | null) {
+  if (keep) getDb().prepare("DELETE FROM sessions WHERE token != ?").run(digest(keep));
+  else getDb().prepare("DELETE FROM sessions").run();
+}
+
+export function changePassword(current: string, next: string) {
+  if (!checkPassword(current)) throw new Error("The current password is wrong.");
+  checkStrength(next);
+  getDb().prepare("UPDATE user SET password_hash = ? WHERE id = 1").run(hashPassword(next));
+}
 
 export { hasUser };

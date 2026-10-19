@@ -22,6 +22,16 @@ export const PROVIDER_PRESETS: Record<Provider, ProviderPreset> = {
     smtpSecure: false,
     help: "Use an app-specific password from appleid.apple.com, not your Apple ID password.",
   },
+  gmail: {
+    label: "Gmail",
+    imapHost: "imap.gmail.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.gmail.com",
+    smtpPort: 465,
+    smtpSecure: true,
+    help: "Use an app password from myaccount.google.com/apppasswords (needs 2-step verification). Works for Google Workspace too.",
+  },
   "ovh-mxplan": {
     label: "OVH MX Plan",
     imapHost: "ssl0.ovh.net",

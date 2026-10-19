@@ -11,13 +11,17 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:mail": "tsx scripts/test-mail.ts",
+    "test:detect": "tsx scripts/test-detect.ts",
+    "test:vault": "tsx scripts/test-vault.ts",
+    "test:push": "tsx scripts/test-push.ts",
     "bootstrap": "tsx scripts/dev-bootstrap.ts",
-    "desktop:build": "node desktop/build.mjs"
+    "desktop:build": "node desktop/build.mjs",
+    "desktop:install": "node desktop/build.mjs --install"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
     "@vercel/blob": "^2.8.1",
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3-multiple-ciphers": "13.0.3",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "imapflow": "^2.4.0",

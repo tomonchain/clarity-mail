@@ -1,9 +1,9 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { scoreAll } from "./priority";
-import type { Account, RoutingRule, ScoredThread, Space, SpaceId, Thread, ThreadStatus } from "./types";
+import type { Account, Provider, RoutingRule, ScoredThread, Space, SpaceId, Thread, ThreadStatus } from "./types";
 
 type Data = {
   spaces: Space[];
@@ -27,10 +27,12 @@ type Store = Data & {
   moveToSpace: (id: string, space: SpaceId) => void;
   reply: (id: string, from: string, body: string) => Promise<void>;
   clearThreads: (ids: string[]) => void;
+  purgeThreads: (ids: string[]) => void;
   restoreThreads: (snapshot: Thread[]) => void;
   addRule: (rule: Omit<RoutingRule, "id">) => void;
   removeRule: (id: string) => void;
   updateAccount: (id: string, patch: Partial<Account>) => void;
+  updateAccountPassword: (id: string, password: string) => Promise<void>;
   updateSpace: (id: SpaceId, patch: Partial<Space>) => void;
   addSpace: (name: string) => void;
   removeSpace: (id: SpaceId) => void;
@@ -38,7 +40,22 @@ type Store = Data & {
   removeAccount: (id: string) => Promise<void>;
   syncAccount: (id: string) => Promise<void>;
   testAccount: (input: Record<string, unknown>) => Promise<void>;
+  detectAccount: (email: string) => Promise<DetectedSettings>;
+  sendMail: (input: { from: string; to: string; cc?: string; subject: string; body: string }) => Promise<void>;
   refresh: () => Promise<void>;
+};
+
+export type DetectedSettings = {
+  provider: Provider;
+  label: string;
+  imapHost: string;
+  imapPort: number;
+  imapSecure: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  source: "domain" | "mx" | "autoconfig" | "guess";
+  help?: string;
 };
 
 const StoreContext = createContext<Store | null>(null);
@@ -67,41 +84,108 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Optimistic changes still on their way to the mail server. A mailbox loaded meanwhile
+  // (a push, a poll) predates them: they are laid over it, so a deleted mail never comes back.
+  const pending = useRef(new Map<number, { patch: (current: Data) => Data; settledAt: number | null }>());
+  const opCount = useRef(0);
+  const loadsStarted = useRef(0);
+  const loadShown = useRef(0);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/state");
+    const seq = ++loadsStarted.current;
+    const res = await fetch("/api/state", { cache: "no-store" });
     if (res.status === 401) {
       signInAgain();
       return;
     }
     if (!res.ok) throw new Error("Could not load your mail.");
-    setData((await res.json()) as Data);
+    const fresh = (await res.json()) as Data;
+    // Answers can arrive out of order: never replace a newer mailbox with an older one.
+    if (seq < loadShown.current) return;
+    loadShown.current = seq;
+    let next = fresh;
+    for (const [id, change] of pending.current) {
+      // Loaded after the server applied the change: it is in the data already.
+      if (change.settledAt !== null && seq > change.settledAt) {
+        pending.current.delete(id);
+        continue;
+      }
+      next = change.patch(next);
+    }
+    setData(next);
     setError(null);
   }, []);
 
   useEffect(() => {
     let cancel = false;
+    let known: number | null = null;
+    let checking = false;
     const load = () => {
       refresh().catch((err: unknown) => {
         if (!cancel) setError(err instanceof Error ? err.message : "Could not load your mail.");
       });
     };
+    // Poll the tiny revision number; fetch the whole mailbox only when it moved.
+    const check = async () => {
+      if (checking || cancel) return;
+      checking = true;
+      try {
+        const res = await fetch("/api/revision", { cache: "no-store" });
+        if (res.status === 401) {
+          signInAgain();
+          return;
+        }
+        if (!res.ok) return;
+        const { revision } = (await res.json()) as { revision: number };
+        if (known !== null && revision !== known) load();
+        known = revision;
+      } catch {
+        // Offline for a moment: the next check catches up.
+      } finally {
+        checking = false;
+      }
+    };
     load();
-    const poll = setInterval(load, 15_000);
+    void check();
+    const fast = window.clarityDesktop ? 3_000 : 10_000;
+    const quick = setInterval(() => void check(), fast);
+    // Sync dots and "synced 2 min ago" change without a new revision.
+    const poll = setInterval(load, 60_000);
     const clock = setInterval(() => setNow(Date.now()), 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void check();
+        load();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
     return () => {
       cancel = true;
+      clearInterval(quick);
       clearInterval(poll);
       clearInterval(clock);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
     };
   }, [refresh]);
 
   const run = useCallback(
     (op: string, payload: Record<string, unknown>, optimistic?: (current: Data) => Data) => {
-      if (optimistic) setData((current) => (current ? optimistic(current) : current));
+      const id = ++opCount.current;
+      if (optimistic) {
+        pending.current.set(id, { patch: optimistic, settledAt: null });
+        setData((current) => (current ? optimistic(current) : current));
+      }
       void post(op, payload)
-        .then(() => refresh())
+        .then(() => {
+          const change = pending.current.get(id);
+          // Loads started from now on see the change; earlier ones still need the overlay.
+          if (change) change.settledAt = loadsStarted.current;
+          return refresh();
+        })
         .catch((err: unknown) => {
+          pending.current.delete(id);
           toast.error(err instanceof Error ? err.message : "Request failed.");
           void refresh().catch(() => undefined);
         });
@@ -157,6 +241,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ...d,
           threads: d.threads.map((t) => (ids.includes(t.id) ? { ...t, status: "done", unread: false } : t)),
         })),
+      purgeThreads: (ids) =>
+        run("thread.purge", { ids }, (d) => ({ ...d, threads: d.threads.filter((t) => !ids.includes(t.id)) })),
       restoreThreads: (snapshot) =>
         run(
           "thread.restore",
@@ -178,12 +264,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeRule: (id) =>
         run("rule.remove", { id }, (d) => ({ ...d, rules: d.rules.filter((r) => r.id !== id) })),
       updateAccount: (id, patch) => {
-        if (patch.defaultSpace) {
-          run("account.update", { id, defaultSpace: patch.defaultSpace }, (d) => ({
-            ...d,
-            accounts: d.accounts.map((a) => (a.id === id ? { ...a, ...patch } : a)),
-          }));
-        }
+        const payload: Record<string, unknown> = { id };
+        if (patch.label !== undefined) payload.label = patch.label;
+        if (patch.defaultSpace) payload.defaultSpace = patch.defaultSpace;
+        if (patch.aliases) payload.aliases = patch.aliases;
+        if (Object.keys(payload).length === 1) return;
+        run("account.update", payload, (d) => ({
+          ...d,
+          accounts: d.accounts.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+        }));
+      },
+      updateAccountPassword: async (id, password) => {
+        await post("account.update", { id, password });
+        await refresh();
       },
       updateSpace: (id, patch) => {
         const payload: Record<string, unknown> = { id, ...patch };
@@ -210,6 +303,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       testAccount: async (input) => {
         await post("account.test", input);
+      },
+      detectAccount: async (email) => (await post("account.detect", { email })) as unknown as DetectedSettings,
+      sendMail: async (input) => {
+        await post("mail.send", input);
+        await refresh();
       },
       refresh,
     };

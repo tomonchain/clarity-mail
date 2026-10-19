@@ -3,11 +3,39 @@ import { z } from "zod";
 import { SPACE_COLORS } from "@/lib/seed";
 import { PROVIDER_PRESETS } from "@/lib/providers";
 import type { RuleField } from "@/lib/types";
-import { isActionError, sendReply, setThreadStar, setThreadStatus, setThreadUnread } from "./actions";
+import {
+  isActionError,
+  purgeThread,
+  sendNew,
+  sendReply,
+  setThreadStar,
+  setThreadStatus,
+  setThreadUnread,
+} from "./actions";
 import { encryptSecret } from "./crypto";
-import { testLogin } from "./connection";
-import { bumpRevision, getDb } from "./db";
+import { mailAccount, testLogin } from "./connection";
+import { bumpRevision, dropOrphanImages, getDb, type AccountRow } from "./db";
+import { detectSettings } from "./detect";
 import { syncAccount } from "./sync";
+
+/** Sync soon after sending so the sent mail shows up in its thread. */
+function syncSoon(accountId: string) {
+  void syncAccount(accountId).catch((err) => console.error("[sync]", err instanceof Error ? err.message : err));
+}
+
+/** "a@x.fr, Bob <b@y.com>; c@z.io" -> ["a@x.fr", "b@y.com", "c@z.io"] */
+export function parseAddresses(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const out: string[] = [];
+  for (const part of raw.split(/[,;\n]/)) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const address = (trimmed.match(/<([^>]+)>/)?.[1] ?? trimmed).trim();
+    if (!z.string().email().safeParse(address).success) throw new ApiError(`"${trimmed}" is not an email address.`);
+    out.push(address);
+  }
+  return out;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -31,7 +59,7 @@ function failAction(err: unknown): never {
 }
 
 const connectionSchema = z.object({
-  provider: z.enum(["icloud", "ovh-mxplan", "imap"]),
+  provider: z.enum(["icloud", "gmail", "ovh-mxplan", "imap"]),
   email: z.string().trim().email(),
   username: z.string().trim().optional(),
   password: z.string().min(1),
@@ -135,16 +163,44 @@ export async function mutate(body: unknown): Promise<unknown> {
           db.prepare("DELETE FROM threads WHERE account_id = ?").run(id);
           db.prepare("DELETE FROM mailboxes WHERE account_id = ?").run(id);
           db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+          dropOrphanImages();
         });
         tx();
         return saved({ ok: true });
       }
       case "account.update": {
-        const { id, defaultSpace } = parse(
-          z.object({ id: z.string(), defaultSpace: z.string() }),
+        const input = parse(
+          z.object({
+            id: z.string(),
+            label: z.string().trim().min(1, "Give the mailbox a name.").max(80).optional(),
+            defaultSpace: z.string().min(1).optional(),
+            aliases: z.array(z.string().trim().email("Aliases must be email addresses.")).max(20).optional(),
+            password: z.string().min(1).optional(),
+          }),
           body,
         );
-        db.prepare("UPDATE accounts SET default_space = ? WHERE id = ?").run(defaultSpace, id);
+        const row = db.prepare("SELECT * FROM accounts WHERE id = ?").get(input.id) as AccountRow | undefined;
+        if (!row) throw new ApiError("Mailbox not found.", 404);
+        if (input.defaultSpace && !db.prepare("SELECT id FROM spaces WHERE id = ?").get(input.defaultSpace)) {
+          throw new ApiError("Pick a space for this mailbox.");
+        }
+        let secret = row.secret;
+        if (input.password) {
+          try {
+            await testLogin({ ...mailAccount(row), password: input.password });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Could not connect.";
+            throw new ApiError(`That password didn't work. ${message}`, 502);
+          }
+          secret = encryptSecret(input.password);
+        }
+        const aliases = input.aliases
+          ? JSON.stringify([...new Set(input.aliases.map((a) => a.toLowerCase()))])
+          : row.aliases;
+        db.prepare(
+          "UPDATE accounts SET label = ?, default_space = ?, aliases = ?, secret = ? WHERE id = ?",
+        ).run(input.label ?? row.label, input.defaultSpace ?? row.default_space, aliases, secret, input.id);
+        if (input.password && row.sync_error) syncSoon(input.id);
         return saved({ ok: true });
       }
       case "account.sync": {
@@ -160,7 +216,7 @@ export async function mutate(body: unknown): Promise<unknown> {
         const input = parse(
           z.object({
             id: z.string(),
-            status: z.enum(["inbox", "done", "snoozed"]),
+            status: z.enum(["inbox", "done", "snoozed", "trash", "spam"]),
             snoozedUntil: z.number().optional(),
           }),
           body,
@@ -186,11 +242,49 @@ export async function mutate(body: unknown): Promise<unknown> {
       case "thread.reply": {
         const input = parse(z.object({ id: z.string(), from: z.string().email(), body: z.string() }), body);
         await sendReply(input.id, input.from, input.body);
+        const thread = db.prepare("SELECT account_id FROM threads WHERE id = ?").get(input.id) as
+          | { account_id: string }
+          | undefined;
+        if (thread) syncSoon(thread.account_id);
         return saved({ ok: true });
+      }
+      case "mail.send": {
+        const input = parse(
+          z.object({
+            from: z.string().trim().email(),
+            to: z.string(),
+            cc: z.string().optional(),
+            subject: z.string().max(500),
+            body: z.string().max(200_000),
+          }),
+          body,
+        );
+        const accountId = await sendNew({
+          from: input.from,
+          to: parseAddresses(input.to),
+          cc: parseAddresses(input.cc),
+          subject: input.subject,
+          body: input.body,
+        });
+        syncSoon(accountId);
+        return saved({ ok: true });
+      }
+      case "account.detect": {
+        const { email } = parse(z.object({ email: z.string().trim().email() }), body);
+        try {
+          return await detectSettings(email);
+        } catch (err) {
+          throw new ApiError(err instanceof Error ? err.message : "Could not detect the servers.");
+        }
       }
       case "thread.clear": {
         const { ids } = parse(z.object({ ids: z.array(z.string()).max(200) }), body);
         for (const id of ids) await setThreadStatus(id, "done");
+        return saved({ ok: true });
+      }
+      case "thread.purge": {
+        const { ids } = parse(z.object({ ids: z.array(z.string()).min(1).max(200) }), body);
+        for (const id of ids) await purgeThread(id);
         return saved({ ok: true });
       }
       case "thread.restore": {
@@ -200,7 +294,7 @@ export async function mutate(body: unknown): Promise<unknown> {
               .array(
                 z.object({
                   id: z.string(),
-                  status: z.enum(["inbox", "done", "snoozed"]),
+                  status: z.enum(["inbox", "done", "snoozed", "trash", "spam"]),
                   unread: z.boolean(),
                   starred: z.boolean(),
                   snoozedUntil: z.number().optional(),

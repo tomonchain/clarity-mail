@@ -1,8 +1,8 @@
-import { rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import { createUser } from "../src/server/auth";
-import { getDb } from "../src/server/db";
+import { checkpointDb, dbPath, getDb, isPlaintextDatabase } from "../src/server/db";
 import { mutate } from "../src/server/mutate";
 import { sendReply } from "../src/server/actions";
 import { readState } from "../src/server/state";
@@ -60,7 +60,7 @@ async function emptyMailbox(user: string, mailbox: string) {
 }
 
 async function main() {
-  for (const box of ["INBOX", "Archive", "Sent", "Trash"]) {
+  for (const box of ["INBOX", "Archive", "Sent", "Trash", "Junk"]) {
     await emptyMailbox(USER, box);
     await emptyMailbox("sam@test.local", box);
   }
@@ -143,6 +143,55 @@ async function main() {
   }
   assert(!stillThere, "newsletter is still in the inbox");
 
+  const folderCount = async (folder: string, subject: string) => {
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const uids = await client.search({ subject }, { uid: true });
+      return Array.isArray(uids) ? uids.length : 0;
+    } finally {
+      lock.release();
+    }
+  };
+  const statusOf = (id: string) => readState().threads.find((t) => t.id === id)?.status;
+  const rate = state.threads.find((t) => t.subject.startsWith("Can you confirm"));
+  assert(rate, "rate thread missing");
+  const rateSubject = "Can you confirm the daily rate";
+
+  await mutate({ op: "thread.status", id: rate.id, status: "trash" });
+  assert(statusOf(rate.id) === "trash", `trash status was ${statusOf(rate.id)}`);
+  assert((await folderCount("Trash", rateSubject)) === 1, "deleted mail is not in Trash");
+  assert((await folderCount("INBOX", rateSubject)) === 0, "deleted mail is still in the inbox");
+
+  await mutate({ op: "thread.status", id: rate.id, status: "spam" });
+  assert(statusOf(rate.id) === "spam", `spam status was ${statusOf(rate.id)}`);
+  assert((await folderCount("Junk", rateSubject)) === 1, "spam is not in the Junk folder");
+  assert((await folderCount("Trash", rateSubject)) === 0, "spam is still in Trash");
+
+  await mutate({ op: "account.sync", id: account.id });
+  assert(statusOf(rate.id) === "spam", `spam status after sync was ${statusOf(rate.id)}`);
+
+  await mutate({ op: "thread.status", id: rate.id, status: "inbox" });
+  assert(statusOf(rate.id) === "inbox", `not-spam status was ${statusOf(rate.id)}`);
+  assert((await folderCount("INBOX", rateSubject)) === 1, "not-spam mail did not return to the inbox");
+  assert((await folderCount("Junk", rateSubject)) === 0, "not-spam mail is still in Junk");
+
+  await mutate({
+    op: "thread.restore",
+    threads: [{ id: rate.id, status: "trash", unread: false, starred: false }],
+  });
+  assert(statusOf(rate.id) === "trash", "restore to trash failed");
+  await mutate({ op: "thread.purge", ids: [rate.id] });
+  assert(statusOf(rate.id) === undefined, "purged thread is still listed");
+  assert((await folderCount("Trash", rateSubject)) === 0, "purged mail is still in Trash");
+
+  await mutate({ op: "account.update", id: account.id, label: "Renamed", aliases: ["Hello@Test.local"] });
+  const renamed = readState().accounts.find((a) => a.id === account.id);
+  assert(renamed?.label === "Renamed", "rename did not stick");
+  assert(renamed.aliases.join() === "hello@test.local", `aliases were ${renamed.aliases.join()}`);
+  // GreenMail accepts any password, so only the happy path of a password change is checked here.
+  await mutate({ op: "account.update", id: account.id, password: "secret" });
+  await mutate({ op: "account.update", id: account.id, aliases: [] });
+
   await sendReply(launch.id, USER, "Yes, Tuesday works.");
   const sam = new ImapFlow({
     host: "127.0.0.1",
@@ -160,11 +209,46 @@ async function main() {
   } finally {
     samInbox.release();
   }
+
+  await mutate({
+    op: "mail.send",
+    from: USER,
+    to: "Sam <sam@test.local>",
+    subject: "Fresh message from compose",
+    body: "Hello Sam, this one is not a reply.",
+  });
+  const samCompose = await sam.getMailboxLock("INBOX");
+  try {
+    const uids = await sam.search({ subject: "Fresh message from compose" }, { uid: true });
+    assert(Array.isArray(uids) && uids.length === 1, "Sam did not receive the composed message");
+  } finally {
+    samCompose.release();
+  }
+  const sent = await client.getMailboxLock("Sent");
+  try {
+    const uids = await client.search({ subject: "Fresh message from compose" }, { uid: true });
+    assert(Array.isArray(uids) && uids.length === 1, "the composed message was not filed in Sent");
+  } finally {
+    sent.release();
+  }
+  let rejected = false;
+  try {
+    await mutate({ op: "mail.send", from: "stranger@else.test", to: "sam@test.local", subject: "x", body: "x" });
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, "sending from an address that is not connected was allowed");
+
   await sam.logout();
   await client.logout();
 
   const rows = getDb().prepare("SELECT COUNT(*) AS c FROM messages").get() as { c: number };
   assert(rows.c >= 4, "messages were not stored");
+  checkpointDb();
+  assert(!isPlaintextDatabase(dbPath()), "the mailbox file is not encrypted");
+  for (const file of [dbPath(), `${dbPath()}-wal`]) {
+    if (existsSync(file)) assert(!readFileSync(file).includes("Launch date"), `${file} holds readable mail`);
+  }
   console.log("mail sync test passed");
 }
 

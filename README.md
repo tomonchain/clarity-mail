@@ -9,10 +9,10 @@ One server holds the mail. The phone and a browser on the Mac read that same cop
 - **Brief**: the top priorities across every space, a card per space, mail you are waiting on, and a pile of newsletters and notifications you can clear in one click (with undo).
 - **Explainable priority**: every thread gets a 0–100 score from named signals (VIP sender, asks for a reply, deadline wording, reply target, starred, newsletter, outside focus hours). The reading pane lists each signal and its points.
 - **Spaces and unified inbox**: per-space and all-inbox views with Priority, Recent, To answer, Noise, Snoozed, and Done, plus search.
-- **Actions on the server**: done, snooze, star, read or unread, move to another space, and reply from the account the mail was sent to.
+- **Actions on the server**: done, snooze, star, read or unread, move to another space, reply from the account the mail was sent to, write a new message, and forward.
 - **Reading**: the mailbox list and the open message scroll on their own. HTML mail keeps its layout (scripts stripped). Markdown mail is rendered when the body looks like Markdown.
-- **Keyboard**: in the inbox, `j` / `k` move, `Enter` opens, `Esc` closes, `e` done, `s` star, `u` unread, `r` reply, `z` snooze until tomorrow morning, `/` search, `?` the shortcut list.
-- **Accounts you add yourself**: iCloud (app-specific password), OVH MX Plan (`ssl0.ovh.net`), or any IMAP host. Spaces and routing rules stay editable.
+- **Keyboard**: in the inbox, `j` / `k` move, `Enter` opens, `Esc` closes, `e` done, `s` star, `u` unread, `r` reply, `z` snooze until tomorrow morning, `/` search, `?` the shortcut list. In the composer, `⌘ Enter` sends.
+- **Accounts you add yourself**: iCloud and Gmail (app-specific password), OVH MX Plan (`ssl0.ovh.net`), or any other address. Type the email and Clarity Mail finds its servers: known domains first, then the domain's MX record (Google Workspace, iCloud+ custom domains, OVH, Microsoft 365, Zoho, Fastmail, Yahoo, Gandi, Infomaniak), then Thunderbird's public server list, then an `imap.` / `smtp.` guess. Hosts and ports stay editable. Spaces and routing rules stay editable.
 - **Triage**: newsletters, receipts, notifications, and questions are classified from headers and wording. Set `DEEPSEEK_API_KEY` (or `MISTRAL_API_KEY`) and new threads also get a one-sentence summary.
 
 ## Run it locally
@@ -32,7 +32,11 @@ Add a mailbox from **Settings**. Presets:
 | Provider | IMAP | SMTP |
 |----------|------|------|
 | iCloud | `imap.mail.me.com:993` | `smtp.mail.me.com:587` (STARTTLS). Use an app-specific password. |
+| Gmail / Google Workspace | `imap.gmail.com:993` | `smtp.gmail.com:465`. Use an app password (myaccount.google.com/apppasswords, needs 2-step verification). |
 | OVH MX Plan | `ssl0.ovh.net:993` | `ssl0.ovh.net:465`. Use the mailbox password. |
+| Other | detected from the address | Port 993 / 465 means TLS; any other port uses STARTTLS. |
+
+`npm run test:detect` checks server detection (offline cases, plus live lookups unless `OFFLINE=1`).
 
 `npm run dev` starts only the website. `npm run worker` is the sync process; `npm run dev:all` runs both.
 
@@ -51,7 +55,9 @@ The sign-in page then shows the dev password (`sorted-dev` unless `SORTED_DEV_PA
 
 ## Mac app
 
-`npm run desktop:build` writes two unsigned apps:
+On this Mac, `npm run desktop:install` builds the app for this Mac's chip, signs it ad hoc, and replaces `/Applications/Clarity Mail.app` (your mail and accounts are kept; they live in `~/Library/Application Support/Clarity Mail`). `npm run desktop:build` does the same without installing. Set `CLARITY_ALL_ARCHES=1` to build both the Apple Silicon and the Intel app.
+
+On Linux, `npm run desktop:build` writes two unsigned apps:
 
 - `desktop/dist/Clarity-Mail-Apple-Silicon.zip` for M1, M2, M3, and M4
 - `desktop/dist/Clarity-Mail-Intel.zip` for an Intel Mac
@@ -64,7 +70,7 @@ On the Mac, unzip the archive, then right-click `Clarity Mail.app` and choose Op
 xattr -dr com.apple.quarantine "/path/to/Clarity Mail.app"
 ```
 
-The first window asks for a password for Clarity Mail. Add iCloud and OVH from Settings. Mail for this app is stored only on that Mac, in `~/Library/Application Support/Clarity Mail`. Closing the window leaves sync running; quit from the Clarity Mail menu.
+The first window asks for a password for Clarity Mail. Add iCloud, Gmail, OVH or any other address from Settings. Mail for this app is stored only on that Mac, in `~/Library/Application Support/Clarity Mail`. Closing the window leaves sync running; quit from the Clarity Mail menu.
 
 This copy is not the website. Accounts and the password are chosen again here.
 

@@ -1,8 +1,28 @@
-import Database from "better-sqlite3";
-import { closeSync, mkdirSync, openSync, rmSync, unlinkSync } from "node:fs";
+import Database from "better-sqlite3-multiple-ciphers";
+import {
+  chmodSync,
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import path from "node:path";
 import { SEED_RULES, SEED_SPACES } from "@/lib/seed";
-import { dataDir } from "./crypto";
+import {
+  canDecryptSecret,
+  dataDir,
+  decryptWith,
+  derivedKey,
+  encryptSecret,
+  legacyKey,
+  legacyKeyFile,
+} from "./crypto";
 
 export type AccountRow = {
   id: string;
@@ -57,11 +77,20 @@ export type MessageRow = {
   sent_at: number;
   body: string;
   html: string | null;
+  html_rev: number;
   seen: number;
   flagged: number;
   list_unsub: number;
   auto_submitted: number;
 };
+
+/** Bump when stored mail HTML must be rebuilt from the source (1: embedded images kept). */
+export const HTML_REV = 1;
+
+/** Embedded images whose message is gone. */
+export function dropOrphanImages() {
+  getDb().prepare("DELETE FROM inline_images WHERE message_id NOT IN (SELECT id FROM messages)").run();
+}
 
 let singleton: Database.Database | null = null;
 
@@ -157,6 +186,13 @@ CREATE TABLE IF NOT EXISTS rules (
   category TEXT,
   position INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS inline_images (
+  message_id TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  mime TEXT NOT NULL,
+  data BLOB NOT NULL,
+  PRIMARY KEY (message_id, idx)
+);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS messages_msgid ON messages(account_id, message_id);
 `;
@@ -199,15 +235,159 @@ function seedDefaults(db: Database.Database) {
   tx();
 }
 
+const PLAIN_HEADER = Buffer.from("SQLite format 3\0", "latin1");
+
+/** True for a readable, unencrypted SQLite file. Encrypted pages look like random bytes. */
+export function isPlaintextDatabase(file: string) {
+  if (!existsSync(file)) return false;
+  const fd = openSync(file, "r");
+  try {
+    const head = Buffer.alloc(16);
+    return readSync(fd, head, 0, 16, 0) === 16 && head.equals(PLAIN_HEADER);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** SQLCipher v4 (AES-256-CBC, HMAC-SHA512 per page), keyed with a raw 256-bit key. */
+function cipherPragmas(db: Database.Database, verb: "key" | "rekey") {
+  db.pragma("cipher = 'sqlcipher'");
+  db.pragma("legacy = 4");
+  db.pragma(`${verb} = "x'${derivedKey("database").toString("hex")}'"`);
+}
+
+export class MailboxKeyError extends Error {}
+
+/** Open the mailbox file with its key. A wrong key is reported as such, never as damage. */
+function openEncrypted(file: string) {
+  const db = new Database(file);
+  // A new file gets the process umask (often 0644): tighten it before anything is written.
+  restrictToOwner(file, 0o600);
+  try {
+    cipherPragmas(db, "key");
+    db.prepare("SELECT count(*) AS c FROM sqlite_master").get();
+  } catch (err) {
+    db.close();
+    const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
+    if (code === "SQLITE_NOTADB") {
+      throw new MailboxKeyError(
+        "Clarity Mail cannot open its mailbox with the key from the Keychain. Your mail is still on the mail servers.",
+      );
+    }
+    throw err;
+  }
+  return db;
+}
+
+function removeSidecarFiles(file: string) {
+  rmSync(`${file}-wal`, { force: true });
+  rmSync(`${file}-shm`, { force: true });
+}
+
+/** Only the owner's account may read the mailbox files. */
+function restrictToOwner(target: string, mode: number) {
+  for (const candidate of [target, `${target}-wal`, `${target}-shm`]) {
+    try {
+      if (existsSync(candidate)) chmodSync(candidate, mode);
+    } catch {
+      // A read-only volume keeps its modes; the database is encrypted anyway.
+    }
+  }
+}
+
+/**
+ * Encrypt a mailbox written by an older version. The plain file stays in place
+ * until an encrypted copy has been checked, then the copy replaces it.
+ */
+function encryptPlaintextDatabase(file: string) {
+  const plain = new Database(file);
+  let count: number;
+  try {
+    plain.pragma("journal_mode = DELETE");
+    count = (plain.prepare("SELECT count(*) AS c FROM sqlite_master").get() as { c: number }).c;
+  } finally {
+    plain.close();
+  }
+  removeSidecarFiles(file);
+  const temp = `${file}.encrypting`;
+  rmSync(temp, { force: true });
+  removeSidecarFiles(temp);
+  copyFileSync(file, temp);
+  try {
+    const db = new Database(temp);
+    try {
+      cipherPragmas(db, "rekey");
+    } finally {
+      db.close();
+    }
+    if (isPlaintextDatabase(temp)) throw new Error("The mailbox copy was not encrypted.");
+    const check = openEncrypted(temp);
+    try {
+      const got = (check.prepare("SELECT count(*) AS c FROM sqlite_master").get() as { c: number }).c;
+      if (got !== count) throw new Error("The encrypted mailbox copy does not match the original.");
+    } finally {
+      check.close();
+    }
+    renameSync(temp, file);
+  } catch (err) {
+    rmSync(temp, { force: true });
+    removeSidecarFiles(temp);
+    throw err;
+  }
+  console.log("[vault] encrypted the mailbox database");
+}
+
+/** Repair leftovers from older versions hold readable mail. Delete them once the mailbox is encrypted. */
+function removePlaintextCopies(dir: string) {
+  for (const name of readdirSync(dir)) {
+    if (!/^sorted\.(damaged|recovered-\d+|repair-src-\d+)\.db$/.test(name)) continue;
+    const file = path.join(/*turbopackIgnore: true*/ dir, name);
+    if (!isPlaintextDatabase(file)) continue;
+    rmSync(file, { force: true });
+    removeSidecarFiles(file);
+  }
+}
+
+/** Mailbox passwords sealed with the old key file are sealed again with the Keychain key. */
+function migrateAccountSecrets(db: Database.Database) {
+  const legacy = legacyKey();
+  if (!legacy) return;
+  const rows = db.prepare("SELECT id, secret FROM accounts").all() as { id: string; secret: string }[];
+  const update = db.prepare("UPDATE accounts SET secret = ? WHERE id = ?");
+  db.transaction(() => {
+    for (const row of rows) {
+      if (canDecryptSecret(row.secret)) continue;
+      try {
+        update.run(encryptSecret(decryptWith(legacy, row.secret)), row.id);
+      } catch {
+        // Unreadable with both keys. The mailbox asks for its password again in Settings.
+      }
+    }
+  })();
+  rmSync(legacyKeyFile(), { force: true });
+  console.log("[vault] moved mailbox passwords to the Keychain key");
+}
+
+const SESSIONS_CLEARED = Symbol.for("clarity.sessions-cleared");
+
+/** The Mac app starts locked: sessions from an earlier launch end when its server starts. */
+function endSessionsFromLastLaunch(db: Database.Database) {
+  const g = globalThis as typeof globalThis & { [SESSIONS_CLEARED]?: boolean };
+  if (process.env.CLARITY_DESKTOP !== "1" || g[SESSIONS_CLEARED]) return;
+  g[SESSIONS_CLEARED] = true;
+  db.prepare("DELETE FROM sessions").run();
+}
+
 /** A new SQLite file with the mailbox schema, used when a dump cannot be loaded as-is. */
 export function createEmptyDatabase(file: string) {
   rmSync(file, { force: true });
   rmSync(`${file}-wal`, { force: true });
   rmSync(`${file}-shm`, { force: true });
-  const db = new Database(file);
+  const db = openEncrypted(file);
   db.pragma("journal_mode = WAL");
   db.exec(SCHEMA);
   db.exec("ALTER TABLE messages ADD COLUMN html TEXT");
+  db.exec(`ALTER TABLE messages ADD COLUMN html_rev INTEGER NOT NULL DEFAULT ${HTML_REV}`);
   db.close();
 }
 
@@ -251,18 +431,32 @@ export function checkpointDb() {
 export function getDb() {
   if (singleton) return singleton;
   const dir = dataDir();
-  mkdirSync(dir, { recursive: true });
-  const db = new Database(dbPath());
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  restrictToOwner(dir, 0o700);
+  const file = dbPath();
+  if (isPlaintextDatabase(file)) encryptPlaintextDatabase(file);
+  // SQLite gives the -wal and -shm files the mode of the main file.
+  restrictToOwner(file, 0o600);
+  const db = openEncrypted(file);
   try {
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
     db.pragma("busy_timeout = 5000");
+    db.pragma("secure_delete = ON");
     db.exec(SCHEMA);
     const messageColumns = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
     if (!messageColumns.some((column) => column.name === "html")) {
       db.exec("ALTER TABLE messages ADD COLUMN html TEXT");
     }
+    if (!messageColumns.some((column) => column.name === "html_rev")) {
+      db.exec("ALTER TABLE messages ADD COLUMN html_rev INTEGER NOT NULL DEFAULT 0");
+      // Only mail with pictures lost its embedded images: the rest needs no new download.
+      db.prepare(`UPDATE messages SET html_rev = ? WHERE html IS NOT NULL AND html NOT LIKE '%<img%'`).run(HTML_REV);
+    }
     seedDefaults(db);
+    migrateAccountSecrets(db);
+    removePlaintextCopies(dir);
+    endSessionsFromLastLaunch(db);
   } catch (err) {
     db.close();
     throw err;

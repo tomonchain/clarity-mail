@@ -47,10 +47,15 @@ export function recomputeThread(threadId: string, dirty = false) {
   }
   const first = msgs[0];
   const last = msgs[msgs.length - 1];
-  const inInbox = msgs.some((m) => m.role === "inbox");
+  const has = (role: string) => msgs.some((m) => m.role === role);
+  const inInbox = has("inbox");
+  const inArchive = has("archive");
   const now = Date.now();
-  const keepSnooze = prev?.status === "snoozed" && prev.snoozed_until != null && prev.snoozed_until > now && !dirty;
-  const status = keepSnooze ? "snoozed" : inInbox ? "inbox" : "done";
+  // A message in the inbox wins; spam and trash only count when nothing was kept in the archive.
+  const filed = inInbox ? "inbox" : has("junk") && !inArchive ? "spam" : has("trash") && !inArchive ? "trash" : "done";
+  const keepSnooze =
+    filed === "done" && prev?.status === "snoozed" && prev.snoozed_until != null && prev.snoozed_until > now && !dirty;
+  const status = keepSnooze ? "snoozed" : filed;
   const unread = status === "inbox" && msgs.some((m) => m.role === "inbox" && m.seen === 0) ? 1 : 0;
   const starred = msgs.some((m) => m.flagged === 1) ? 1 : 0;
   const mine = ownAddresses(first.account_id);

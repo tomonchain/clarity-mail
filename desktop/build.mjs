@@ -34,10 +34,17 @@ const SQLITE_TOOLS = {
 const RCODESIGN =
   "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz";
 
-const ARCHES = [
+const ALL_ARCHES = [
   { arch: "arm64", folder: "Clarity-Mail-Apple-Silicon", chip: "Apple Silicon (M1, M2, M3, M4)" },
   { arch: "x64", folder: "Clarity-Mail-Intel", chip: "Intel" },
 ];
+const ON_MAC = process.platform === "darwin";
+// On a Mac, build only for this Mac's chip unless both are asked for.
+const ARCHES =
+  ON_MAC && process.env.CLARITY_ALL_ARCHES !== "1"
+    ? ALL_ARCHES.filter(({ arch }) => arch === process.arch)
+    : ALL_ARCHES;
+const INSTALL = process.argv.includes("--install");
 
 function run(command, args, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -147,8 +154,8 @@ function stageServer() {
   const staticSrc = path.join(root, ".next-desktop", "static");
   if (!existsSync(staticSrc)) throw new Error("The desktop build did not emit static files");
   cpSync(staticSrc, path.join(serverDir, ".next-desktop", "static"), { recursive: true, dereference: true });
-  const prebuilds = path.join(root, "node_modules", "better-sqlite3", "prebuilds");
-  const dest = path.join(serverDir, "node_modules", "better-sqlite3", "prebuilds");
+  const prebuilds = path.join(root, "node_modules", "better-sqlite3-multiple-ciphers", "prebuilds");
+  const dest = path.join(serverDir, "node_modules", "better-sqlite3-multiple-ciphers", "prebuilds");
   mkdirSync(dest, { recursive: true });
   for (const name of readdirSync(prebuilds)) {
     if (name.endsWith(".node")) copyFileSync(path.join(prebuilds, name), path.join(dest, name));
@@ -159,7 +166,7 @@ function stageServer() {
   }
   stripEnvFiles(serverDir);
   assertNoSecrets(serverDir);
-  if (!existsSync(path.join(serverDir, "node_modules", "better-sqlite3", "prebuilds", "darwin-arm64.node"))) {
+  if (!existsSync(path.join(serverDir, "node_modules", "better-sqlite3-multiple-ciphers", "prebuilds", "darwin-arm64.node"))) {
     throw new Error("darwin sqlite prebuild missing from the staged server");
   }
 }
@@ -209,6 +216,9 @@ async function smokeServer() {
           }
           if (!existsSync(path.join(dataDir, "sorted.db"))) {
             throw new Error("The server did not store the mailbox in SORTED_DATA_DIR");
+          }
+          if (readFileSync(path.join(dataDir, "sorted.db")).subarray(0, 15).toString("latin1") === "SQLite format 3") {
+            throw new Error("The server stored the mailbox unencrypted");
           }
           if (existsSync(path.join(serverDir, "data"))) {
             throw new Error("The server wrote the mailbox inside the app bundle");
@@ -270,9 +280,11 @@ async function nodeBinary(arch) {
 
 async function sqliteBinary(arch) {
   const page = (await fetchBytes("https://www.sqlite.org/download.html")).toString("utf8");
-  const file = SQLITE_TOOLS[arch];
-  const href = page.match(new RegExp(`(?:https?:)?//[^"'\\s]*${file}|/?\\d{4}/${file}`))?.[0];
-  if (!href) throw new Error(`sqlite.org has no ${file}`);
+  // sqlite.org only lists the current release, so match any version instead of pinning one.
+  const pattern = `sqlite-tools-osx-${arch}-\\d+\\.zip`;
+  const href = page.match(new RegExp(`(?:https?:)?//[^"'\\s]*${pattern}|/?\\d{4}/${pattern}`))?.[0];
+  if (!href) throw new Error(`sqlite.org has no ${SQLITE_TOOLS[arch]} (or newer)`);
+  const file = href.split("/").pop();
   const url = href.startsWith("http") ? href : `https://sqlite.org/${href.replace(/^\/+/, "")}`;
   const archive = await download(url, path.join(cache, file));
   const unpack = path.join(cache, `sqlite-${arch}`);
@@ -308,6 +320,8 @@ function expectMachO(file, arch) {
 }
 
 async function signer() {
+  // macOS ships codesign; the downloaded rcodesign is only for Linux build hosts.
+  if (ON_MAC) return null;
   const archive = await download(RCODESIGN, path.join(cache, "apple-codesign.tar.gz"));
   const bin = path.join(cache, "rcodesign");
   if (!existsSync(bin)) {
@@ -368,8 +382,19 @@ async function pack(arch, rcodesign) {
     npmRebuild: false,
     buildDependenciesFromSource: false,
     asar: true,
+    // Close Electron's debug and side doors: no running as plain Node, no NODE_OPTIONS or
+    // --inspect, app code only from the integrity-checked asar, cookies encrypted at rest.
+    electronFuses: {
+      runAsNode: false,
+      enableCookieEncryption: true,
+      enableNodeOptionsEnvironmentVariable: false,
+      enableNodeCliInspectArguments: false,
+      enableEmbeddedAsarIntegrityValidation: true,
+      onlyLoadAppFromAsar: true,
+      resetAdHocDarwinSignature: true,
+    },
     directories: { output: "dist" },
-    files: ["main.js", "package.json"],
+    files: ["main.js", "preload.js", "package.json"],
     extraResources: [
       { from: "staging/payload", to: "server" },
       { from: `staging/bin/${arch}`, to: "bin" },
@@ -405,7 +430,8 @@ async function pack(arch, rcodesign) {
   mkdirSync(hold, { recursive: true });
   await run("cp", ["-a", built, path.join(hold, "Clarity Mail.app")]);
   const app = path.join(hold, "Clarity Mail.app");
-  await run(rcodesign, ["sign", app]);
+  if (rcodesign) await run(rcodesign, ["sign", app]);
+  else await run("codesign", ["--force", "--deep", "--sign", "-", app]);
   return app;
 }
 
@@ -480,11 +506,18 @@ async function main() {
     await expectMachO(path.join(app, "Contents", "Resources", "bin", "node"), archInfo.arch);
     await expectMachO(path.join(app, "Contents", "Resources", "bin", "sqlite3"), archInfo.arch);
     await expectMachO(
-      path.join(app, "Contents", "Resources", "server", "app", "node_modules", "better-sqlite3", "prebuilds", `darwin-${archInfo.arch}.node`),
+      path.join(app, "Contents", "Resources", "server", "app", "node_modules", "better-sqlite3-multiple-ciphers", "prebuilds", `darwin-${archInfo.arch}.node`),
       archInfo.arch,
     );
     assertNoMailbox(app);
     zips.push(await bundle(archInfo, app));
+    if (INSTALL && ON_MAC && archInfo.arch === process.arch) await install(app);
+  }
+  if (ON_MAC) {
+    const sums = zips.map((zip) => `${sha256(zip)}  ${path.basename(zip)}`);
+    writeFileSync(path.join(desktop, "dist", "SHA256.txt"), `${sums.join("\n")}\n`);
+    for (const zip of zips) process.stdout.write(`${zip}\n`);
+    return;
   }
   mkdirSync("/opt/cursor/artifacts", { recursive: true });
   const sums = [];
@@ -505,6 +538,15 @@ async function main() {
   const note = `${sums.join("\n")}\n`;
   writeFileSync("/opt/cursor/artifacts/Clarity-Mail-SHA256.txt", note);
   writeFileSync(path.join(desktop, "dist", "SHA256.txt"), note);
+}
+
+/** Replace /Applications/Clarity Mail.app with the fresh build. Mail data lives elsewhere and is kept. */
+async function install(app) {
+  const dest = "/Applications/Clarity Mail.app";
+  await run("pkill", ["-x", "Clarity Mail"]).catch(() => undefined);
+  rmSync(dest, { recursive: true, force: true });
+  await run("ditto", [app, dest]);
+  process.stdout.write(`installed ${dest}\n`);
 }
 
 function splitZip(zip) {

@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
+import { Keyboard } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -8,23 +11,42 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useThreadCommands } from "@/components/thread-actions";
+import { PurgeDialog, useThreadCommands } from "@/components/thread-actions";
 import { snoozeOptions } from "@/lib/format";
 import { useStore } from "@/lib/store";
 import type { ScoredThread } from "@/lib/types";
 
-const KEYS: [string, string][] = [
-  ["j / ↓", "Next conversation"],
-  ["k / ↑", "Previous conversation"],
-  ["Enter", "Open"],
-  ["Esc", "Close, or clear search"],
-  ["e", "Mark done"],
-  ["s", "Star"],
-  ["u", "Toggle unread"],
-  ["r", "Reply"],
-  ["z", "Snooze until tomorrow morning"],
-  ["/", "Search"],
-  ["?", "Show these shortcuts"],
+const KEY_GROUPS: { title: string; keys: [string[], string][] }[] = [
+  {
+    title: "Move around",
+    keys: [
+      [["j", "↓"], "Next conversation"],
+      [["k", "↑"], "Previous conversation"],
+      [["Enter"], "Open"],
+      [["Esc"], "Close, or clear search"],
+      [["/"], "Search"],
+    ],
+  },
+  {
+    title: "Triage",
+    keys: [
+      [["e"], "Archive"],
+      [["#", "⌫"], "Delete"],
+      [["!"], "Report spam / not spam"],
+      [["z"], "Snooze until tomorrow"],
+      [["s"], "Star"],
+      [["u"], "Mark read / unread"],
+    ],
+  },
+  {
+    title: "Write",
+    keys: [
+      [["c"], "New message"],
+      [["r"], "Reply"],
+      [["f"], "Forward"],
+      [["⌘", "↵"], "Send"],
+    ],
+  },
 ];
 
 function isTyping(target: EventTarget | null) {
@@ -34,6 +56,19 @@ function isTyping(target: EventTarget | null) {
     target.tagName === "TEXTAREA" ||
     target.tagName === "SELECT" ||
     target.isContentEditable
+  );
+}
+
+/** A dialog or menu is open: keys belong to it, not to the inbox. */
+function overlayOpen() {
+  return Boolean(document.querySelector('[data-slot="dialog-content"], [role="menu"], [role="alertdialog"]'));
+}
+
+function Kbd({ children }: { children: string }) {
+  return (
+    <kbd className="inline-flex h-6 min-w-6 items-center justify-center rounded-md border border-b-2 bg-surface px-1.5 font-mono text-[11px] text-muted-foreground">
+      {children}
+    </kbd>
   );
 }
 
@@ -51,12 +86,13 @@ export function InboxShortcuts({
   searchRef: RefObject<HTMLInputElement | null>;
 }) {
   const { select, setUnread, toggleStar, now } = useStore();
-  const { done, snooze } = useThreadCommands();
+  const { archive, trash, spam, toInbox, snooze, forward } = useThreadCommands();
   const [help, setHelp] = useState(false);
+  const [purging, setPurging] = useState<ScoredThread | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.metaKey || event.ctrlKey) return;
       const typing = isTyping(event.target);
 
       if (event.key === "Escape") {
@@ -64,7 +100,7 @@ export function InboxShortcuts({
           (event.target as HTMLElement).blur();
           return;
         }
-        if (help) return;
+        if (help || overlayOpen()) return;
         if (query) {
           event.preventDefault();
           setQuery("");
@@ -74,7 +110,7 @@ export function InboxShortcuts({
         return;
       }
 
-      if (typing || help) return;
+      if (typing || help || overlayOpen()) return;
 
       const index = selected ? visible.findIndex((thread) => thread.id === selected.id) : -1;
       const go = (nextIndex: number) => {
@@ -114,67 +150,116 @@ export function InboxShortcuts({
       }
       if (!selected) return;
 
-      if (event.key === "e" && selected.status === "inbox") {
-        event.preventDefault();
-        const neighbor = visible[index + 1] ?? visible[index - 1] ?? null;
-        done(selected);
-        select(neighbor?.id ?? null);
-        return;
-      }
-      if (event.key === "s") {
-        event.preventDefault();
-        toggleStar(selected.id);
-        return;
-      }
-      if (event.key === "u") {
-        event.preventDefault();
-        setUnread(selected.id, !selected.unread);
-        return;
-      }
-      if (event.key === "r") {
-        event.preventDefault();
-        document.getElementById("reply-body")?.focus();
-        return;
-      }
-      if (event.key === "z" && selected.status === "inbox") {
-        const option = snoozeOptions(now).find((item) => item.label === "Tomorrow morning");
-        if (!option) return;
-        event.preventDefault();
-        const neighbor = visible[index + 1] ?? visible[index - 1] ?? null;
-        snooze(selected, option.label, option.until);
-        select(neighbor?.id ?? null);
+      switch (event.key) {
+        case "e":
+          if (selected.status === "done") return;
+          event.preventDefault();
+          archive(selected);
+          return;
+        case "#":
+        case "Delete":
+        case "Backspace":
+          event.preventDefault();
+          if (selected.status === "trash") setPurging(selected);
+          else trash(selected);
+          return;
+        case "!":
+          event.preventDefault();
+          if (selected.status === "spam") toInbox(selected);
+          else spam(selected);
+          return;
+        case "s":
+          event.preventDefault();
+          toggleStar(selected.id);
+          return;
+        case "u":
+          event.preventDefault();
+          setUnread(selected.id, !selected.unread);
+          return;
+        case "r":
+          event.preventDefault();
+          document.getElementById("reply-body")?.focus();
+          return;
+        case "f":
+          event.preventDefault();
+          forward(selected);
+          return;
+        case "z": {
+          if (selected.status !== "inbox") return;
+          const option = snoozeOptions(now).find((item) => item.label === "Tomorrow morning");
+          if (!option) return;
+          event.preventDefault();
+          snooze(selected, option.label, option.until);
+          return;
+        }
       }
     };
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [visible, selected, query, setQuery, searchRef, help, select, setUnread, toggleStar, done, snooze, now]);
+  }, [
+    visible,
+    selected,
+    query,
+    setQuery,
+    searchRef,
+    help,
+    select,
+    setUnread,
+    toggleStar,
+    archive,
+    trash,
+    spam,
+    toInbox,
+    snooze,
+    forward,
+    now,
+  ]);
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setHelp(true)}
-        className="shrink-0 text-xs text-muted-foreground hover:text-foreground"
-      >
-        Shortcuts
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button variant="ghost" size="icon-sm" aria-label="Keyboard shortcuts" onClick={() => setHelp(true)} />
+          }
+        >
+          <Keyboard />
+        </TooltipTrigger>
+        <TooltipContent>Shortcuts (?)</TooltipContent>
+      </Tooltip>
       <Dialog open={help} onOpenChange={setHelp}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Keyboard shortcuts</DialogTitle>
-            <DialogDescription>These work in the inbox, unless you are typing.</DialogDescription>
+            <DialogDescription>These work in every mailbox view, unless you are typing.</DialogDescription>
           </DialogHeader>
-          <dl className="grid grid-cols-[7.5rem_1fr] gap-y-2 text-sm">
-            {KEYS.map(([key, label]) => (
-              <div key={key} className="contents">
-                <dt className="font-mono text-xs text-muted-foreground">{key}</dt>
-                <dd>{label}</dd>
-              </div>
+          <div className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
+            {KEY_GROUPS.map((group) => (
+              <section key={group.title} className="space-y-2">
+                <h3 className="text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
+                  {group.title}
+                </h3>
+                <ul className="space-y-2 text-sm">
+                  {group.keys.map(([keys, label]) => (
+                    <li key={label} className="flex items-center justify-between gap-3">
+                      <span>{label}</span>
+                      <span className="flex shrink-0 gap-1">
+                        {keys.map((k) => (
+                          <Kbd key={k}>{k}</Kbd>
+                        ))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ))}
-          </dl>
+          </div>
         </DialogContent>
       </Dialog>
+      {purging && (
+        <PurgeDialog thread={purging} open onOpenChange={(open) => !open && setPurging(null)} />
+      )}
     </>
   );
 }

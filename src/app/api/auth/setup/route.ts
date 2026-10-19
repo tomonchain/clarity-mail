@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createUser, startSession } from "@/server/auth";
+import { createUser, issueSession } from "@/server/auth";
 import { SESSION_COOKIE, sessionCookie } from "@/server/http";
 import { persistDb, prepareDb } from "@/server/snapshot";
 
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const message = err instanceof Error ? err.message : "Could not set up.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
-  const token = startSession(body?.password ?? "");
+  const token = issueSession();
   try {
     await persistDb();
   } catch (err) {

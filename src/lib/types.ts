@@ -10,7 +10,7 @@ export type Space = {
   slaHours?: number;
 };
 
-export type Provider = "icloud" | "ovh-mxplan" | "imap";
+export type Provider = "icloud" | "gmail" | "ovh-mxplan" | "imap";
 
 export type Account = {
   id: string;
@@ -46,9 +46,11 @@ export type Message = {
   body: string;
   /** Sanitized HTML, when the message had an HTML part. */
   html?: string;
+  /** Role of the IMAP folder holding it: inbox, sent, archive, trash, junk or other. */
+  folder?: string;
 };
 
-export type ThreadStatus = "inbox" | "done" | "snoozed";
+export type ThreadStatus = "inbox" | "done" | "snoozed" | "trash" | "spam";
 
 export type Thread = {
   id: string;

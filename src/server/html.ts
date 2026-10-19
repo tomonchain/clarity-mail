@@ -39,7 +39,19 @@ const STYLE = [
   "white-space",
 ];
 
-const safeStyle = [/^[\w\s%#.,()\-/'":]+$/];
+// No url(), image() or expression(): CSS must not fetch anything (tracking) or run anything.
+const safeStyle = [/^(?!.*\b(?:url|image|image-set|expression)\s*\()[\w\s%#.,()\-/'":]+$/i];
+
+/** Where Clarity serves an image embedded in a mail (cid:), from the local mailbox. */
+export const INLINE_IMAGE_SRC = /^\/api\/inline\/[\w-]{1,64}\/\d{1,4}$/;
+
+/** Images: remote (http/https, blocked or not by the reader) or embedded ones Clarity stored. */
+function imageSource(src: string | undefined) {
+  if (!src) return undefined;
+  const value = src.trim();
+  if (/^https?:\/\//i.test(value) || INLINE_IMAGE_SRC.test(value)) return value;
+  return undefined;
+}
 
 /** Keep the layout of an HTML mail and drop scripts, forms, and remote-active content. */
 export function cleanMailHtml(input: string) {
@@ -74,6 +86,11 @@ export function cleanMailHtml(input: string) {
     allowedSchemesByTag: { img: ["http", "https"] },
     transformTags: {
       a: sanitizeHtml.simpleTransform("a", { rel: "noreferrer noopener", target: "_blank" }),
+      img: (tagName, attribs) => {
+        const { src, ...rest } = attribs;
+        const kept = imageSource(src);
+        return { tagName, attribs: kept ? { ...rest, src: kept } : rest };
+      },
     },
   });
 }

@@ -1,10 +1,20 @@
 import { wakeSnoozes } from "../server/actions";
 import { holdDb, persistDb } from "../server/snapshot";
 import { accountIds, syncAccount } from "../server/sync";
+import { reconcilePush } from "./push";
 
 const INTERVAL_MS = 30_000;
+// Serverless hosts cannot keep IMAP connections open between requests.
+const PUSH = process.env.VERCEL !== "1" && process.env.CLARITY_PUSH !== "0";
 
 async function tick() {
+  if (PUSH) {
+    try {
+      await reconcilePush();
+    } catch (err) {
+      console.error("[push]", err instanceof Error ? err.message : err);
+    }
+  }
   try {
     await holdDb(async () => {
       try {

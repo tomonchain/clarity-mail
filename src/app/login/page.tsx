@@ -5,7 +5,7 @@ export const instant = false;
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; locked?: string }>;
 }) {
   const params = await searchParams;
   const error =
@@ -16,5 +16,5 @@ export default async function LoginPage({
         : params.error === "waking"
           ? "The mailbox is waking up. Try again in a moment."
           : null;
-  return <LoginForm error={error} />;
+  return <LoginForm error={error} locked={params.locked === "1"} />;
 }

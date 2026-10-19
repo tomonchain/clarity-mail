@@ -3,15 +3,18 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { LogoMark } from "@/components/brand";
 import { StoreProvider } from "@/lib/store";
 
 type Status = { needsSetup: boolean; authenticated: boolean; path: string };
 
 function Splash() {
   return (
-    <div className="grid h-dvh place-items-center gap-3">
-      <div className="h-8 w-8 animate-pulse rounded-lg bg-muted" />
-      <p className="text-sm text-muted-foreground">Opening your mail…</p>
+    <div className="grid h-dvh place-items-center bg-surface">
+      <div className="flex flex-col items-center gap-4">
+        <LogoMark className="size-12 animate-pulse rounded-2xl" />
+        <p className="text-sm text-muted-foreground">Opening your mail…</p>
+      </div>
     </div>
   );
 }

@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { startSession } from "@/server/auth";
-import { SESSION_COOKIE, sessionCookie } from "@/server/http";
+import { clientKey, SESSION_COOKIE, sessionCookie } from "@/server/http";
 import { prepareDb } from "@/server/snapshot";
 
 const attempts = new Map<string, { count: number; reset: number }>();
+const MAX_FAILURES = 8;
+const WINDOW_MS = 10 * 60 * 1000;
 
 function bounce(path: string) {
   return new NextResponse(null, {
@@ -26,10 +28,10 @@ async function readPassword(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  const ip = clientKey(request);
   const now = Date.now();
   const bucket = attempts.get(ip);
-  if (bucket && bucket.reset > now && bucket.count >= 8) {
+  if (bucket && bucket.reset > now && bucket.count >= MAX_FAILURES) {
     return bounce("/login?error=rate");
   }
   try {
@@ -43,8 +45,10 @@ export async function POST(request: Request) {
     const current = attempts.get(ip);
     attempts.set(ip, {
       count: current && current.reset > now ? current.count + 1 : 1,
-      reset: current && current.reset > now ? current.reset : now + 10 * 60 * 1000,
+      reset: current && current.reset > now ? current.reset : now + WINDOW_MS,
     });
+    // Each wrong guess costs a second, on top of the scrypt work.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     return bounce("/login?error=wrong");
   }
   attempts.delete(ip);
