@@ -38,13 +38,23 @@ function inRoundRect(px, py, bar) {
 const TOP = [0x5b, 0x9b, 0xff];
 const BOTTOM = [0x27, 0x45, 0xb8];
 
-export function iconPng(size) {
-  const margin = size * (100 / 1024);
+/**
+ * The mark as a PNG. Defaults draw the macOS icon. Options for other platforms:
+ * margin (fraction of size around the tile), radius (fraction of the tile), glyph (fraction
+ * of the tile the lines span), background (RGB behind the tile instead of transparency), height (a taller or wider canvas,
+ * the tile centred in it; margin stays a fraction of the width).
+ */
+export function iconPng(
+  size,
+  { margin: marginFrac = 100 / 1024, radius = 0.225, glyph = 0.62, background = null, height = size } = {},
+) {
+  const margin = size * marginFrac;
   const body = size - margin * 2;
-  const tile = { x: margin, y: margin, w: body, h: body, r: body * 0.225 };
-  // Same geometry as the in-app LogoMark: glyph is 62% of the tile, on a 32-unit grid.
-  const unit = (body * 0.62) / 32;
-  const gx = margin + body * 0.19;
+  const dy = (height - size) / 2;
+  const tile = { x: margin, y: margin + dy, w: body, h: body, r: body * radius };
+  // Same geometry as the in-app LogoMark: on a 32-unit grid, centred in the tile.
+  const unit = (body * glyph) / 32;
+  const gx = margin + (body * (1 - glyph)) / 2;
   const stroke = 3.2 * unit;
   const bars = [
     [10.5, 6, 26],
@@ -52,21 +62,25 @@ export function iconPng(size) {
     [21.5, 6, 13.5],
   ].map(([cy, x1, x2]) => ({
     x: gx + (x1 - stroke / unit / 2) * unit,
-    y: gx + cy * unit - stroke / 2,
+    y: gx + dy + cy * unit - stroke / 2,
     w: (x2 - x1) * unit + stroke,
     h: stroke,
     r: stroke / 2,
   }));
   const S = 4;
-  const stride = size * 4 + 1;
-  const raw = Buffer.alloc(stride * size);
-  for (let y = 0; y < size; y += 1) {
+  // On a background the image is opaque: RGB, no alpha channel (the App Store requires it).
+  const channels = background ? 3 : 4;
+  const stride = size * channels + 1;
+  const raw = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y += 1) {
     const row = y * stride;
     raw[row] = 0;
     for (let x = 0; x < size; x += 1) {
       let inTile = 0;
       let inBar = 0;
-      for (let sy = 0; sy < S; sy += 1) {
+      // Pixels clear of the tile (most of a splash screen) need no sampling.
+      const outside = x + 1 < tile.x || y + 1 < tile.y || x > tile.x + tile.w || y > tile.y + tile.h;
+      for (let sy = 0; sy < S && !outside; sy += 1) {
         for (let sx = 0; sx < S; sx += 1) {
           const px = x + (sx + 0.5) / S;
           const py = y + (sy + 0.5) / S;
@@ -75,25 +89,27 @@ export function iconPng(size) {
           if (bars.some((bar) => inRoundRect(px, py, bar))) inBar += 1;
         }
       }
-      const offset = row + 1 + x * 4;
-      if (inTile === 0) {
+      const offset = row + 1 + x * channels;
+      const cover = inTile / (S * S);
+      if (inTile === 0 && !background) {
         raw[offset + 3] = 0;
         continue;
       }
-      const t = Math.min(1, Math.max(0, ((x - margin) + (y - margin)) / (body * 2)));
-      const mix = inBar / inTile;
+      const t = Math.min(1, Math.max(0, ((x - margin) + (y - dy - margin)) / (body * 2)));
+      const mix = inTile ? inBar / inTile : 0;
       for (let c = 0; c < 3; c += 1) {
         const bg = TOP[c] + (BOTTOM[c] - TOP[c]) * t;
-        raw[offset + c] = Math.round(bg + (255 - bg) * mix);
+        const color = bg + (255 - bg) * mix;
+        raw[offset + c] = Math.round(background ? background[c] + (color - background[c]) * cover : color);
       }
-      raw[offset + 3] = Math.round((255 * inTile) / (S * S));
+      if (!background) raw[offset + 3] = Math.round(255 * cover);
     }
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(size, 0);
-  ihdr.writeUInt32BE(size, 4);
+  ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8;
-  ihdr[9] = 6;
+  ihdr[9] = background ? 2 : 6;
   return Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk("IHDR", ihdr),

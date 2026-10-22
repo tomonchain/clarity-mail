@@ -1,13 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Archive,
   BellOff,
+  Check,
   CheckCircle2,
+  Clock,
+  FolderInput,
   Inbox,
+  Mail,
   MailOpen,
+  ShieldAlert,
+  X,
   MessageCircleReply,
   Search,
   SearchX,
@@ -15,7 +21,7 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { InboxShortcuts } from "@/components/inbox-shortcuts";
+import { InboxShortcuts, type Picker } from "@/components/inbox-shortcuts";
 import { SenderAvatar } from "@/components/sender-avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,7 +44,7 @@ import { folderOf, INBOX_FILTERS, type InboxFilter, type InboxTab } from "@/lib/
 import { relativeTime } from "@/lib/format";
 import { isLowValue, PRIORITY_THRESHOLD, whyLine } from "@/lib/priority";
 import { useStore } from "@/lib/store";
-import type { ScoredThread } from "@/lib/types";
+import type { Message, ScoredThread } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export type { InboxTab } from "@/lib/folders";
@@ -140,13 +146,20 @@ function RowActions({ thread }: { thread: ScoredThread }) {
 function ThreadRow({
   thread,
   selected,
+  checked,
+  selecting,
   showSpace,
   onSelect,
+  onToggle,
 }: {
   thread: ScoredThread;
   selected: boolean;
+  checked: boolean;
+  /** Some row is ticked: every row shows its box, so the list reads as a selection. */
+  selecting: boolean;
   showSpace: boolean;
   onSelect: () => void;
+  onToggle: (range: boolean) => void;
 }) {
   const { spaces, now } = useStore();
   const last = thread.messages[thread.messages.length - 1];
@@ -164,17 +177,33 @@ function ThreadRow({
       <button
         type="button"
         data-thread-id={thread.id}
-        onClick={onSelect}
+        onClick={(event) => {
+          // ⌘-click or ⇧-click ticks rows instead of opening them, as in Finder.
+          if (event.metaKey || event.ctrlKey || event.shiftKey) {
+            event.preventDefault();
+            onToggle(event.shiftKey);
+            return;
+          }
+          onSelect();
+        }}
         aria-current={selected}
         className={cn(
-          "group relative flex w-full gap-3 rounded-xl py-3 pr-3 pl-4 text-left transition-colors",
-          selected ? "bg-brand-soft" : "hover:bg-accent/70",
+          "group relative flex w-full gap-3 rounded-xl py-3 pr-3 pl-4 text-left transition-colors select-none",
+          checked
+            ? "bg-brand-soft/70 ring-1 ring-brand/25 ring-inset"
+            : selected
+              ? "bg-brand-soft"
+              : "hover:bg-accent/70",
+          // While ticking, the cursor row needs to stand out from the ticked ones.
+          selected && selecting && "ring-2 ring-brand/70 ring-inset",
         )}
       >
         {thread.unread && (
           <span className="absolute top-[1.4rem] left-1.5 size-2 rounded-full bg-brand" aria-label="Unread" />
         )}
-        <SenderAvatar name={face.name} email={face.email} />
+        <span className={cn("transition-opacity", (checked || selecting) && "opacity-0", "max-lg:opacity-100 lg:group-hover/row:opacity-0")}>
+          <SenderAvatar name={face.name} email={face.email} />
+        </span>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex items-center gap-2">
             <span
@@ -226,10 +255,187 @@ function ThreadRow({
           )}
         </div>
       </button>
-      <RowActions thread={thread} />
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        aria-label={checked ? "Unselect" : "Select"}
+        title="Select (x)"
+        onClick={(event) => onToggle(event.shiftKey)}
+        className={cn(
+          "absolute top-3 left-4 grid size-9 place-items-center rounded-full transition-opacity max-lg:hidden",
+          checked || selecting ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
+        )}
+      >
+        <span
+          className={cn(
+            "grid size-[18px] place-items-center rounded-[5px] border-[1.5px] transition-colors",
+            checked ? "border-brand bg-brand text-white" : "border-muted-foreground/45 bg-card hover:border-foreground/60",
+          )}
+        >
+          {checked && <Check className="size-3" strokeWidth={3} />}
+        </span>
+      </button>
+      {!selecting && <RowActions thread={thread} />}
     </li>
   );
 }
+
+type BulkButton = { label: string; keys: string; icon: LucideIcon; run: () => void; destructive?: boolean };
+
+/** The actions offered for ticked threads, the same ones the keys trigger. */
+function useBulkButtons(threads: ScoredThread[], clear: () => void, setPicker: (picker: Picker) => void): BulkButton[] {
+  const { archive, trash, spam, toInbox, star, markRead } = useThreadCommands();
+  const then = (fn: () => void) => () => {
+    fn();
+    clear();
+  };
+  const inInbox = threads.filter((t) => t.status === "inbox");
+  const allTrash = threads.every((t) => t.status === "trash");
+  const allSpam = threads.every((t) => t.status === "spam");
+  const buttons: BulkButton[] = [];
+  if (allTrash || allSpam) {
+    buttons.push({ label: allSpam ? "Not spam" : "Restore", keys: allSpam ? "!" : "", icon: Inbox, run: then(() => toInbox(threads)) });
+  } else if (threads.some((t) => t.status !== "done")) {
+    buttons.push({ label: "Archive", keys: "e", icon: Archive, run: then(() => archive(threads.filter((t) => t.status !== "done"))) });
+  } else {
+    buttons.push({ label: "Move to inbox", keys: "", icon: Inbox, run: then(() => toInbox(threads)) });
+  }
+  if (!allTrash) {
+    buttons.push({
+      label: "Delete",
+      keys: "#",
+      icon: Trash2,
+      destructive: true,
+      run: then(() => trash(threads.filter((t) => t.status !== "trash"))),
+    });
+  }
+  if (!allSpam && !allTrash) {
+    buttons.push({ label: "Spam", keys: "!", icon: ShieldAlert, run: then(() => spam(threads.filter((t) => t.status !== "spam"))) });
+  }
+  if (inInbox.length > 0) buttons.push({ label: "Snooze", keys: "⇧Z", icon: Clock, run: () => setPicker("snooze") });
+  buttons.push({ label: "Move", keys: "v", icon: FolderInput, run: () => setPicker("move") });
+  const anyUnstarred = threads.some((t) => !t.starred);
+  buttons.push({ label: anyUnstarred ? "Star" : "Unstar", keys: "s", icon: Star, run: () => star(threads) });
+  const anyUnread = threads.some((t) => t.unread);
+  buttons.push({
+    label: anyUnread ? "Mark read" : "Mark unread",
+    keys: "u",
+    icon: anyUnread ? MailOpen : Mail,
+    run: () => markRead(threads),
+  });
+  return buttons;
+}
+
+/** Above the list while threads are ticked: how many, select all, and the actions. */
+function SelectionBar({
+  threads,
+  total,
+  onAll,
+  onClear,
+  setPicker,
+}: {
+  threads: ScoredThread[];
+  total: number;
+  onAll: () => void;
+  onClear: () => void;
+  setPicker: (picker: Picker) => void;
+}) {
+  const buttons = useBulkButtons(threads, onClear, setPicker);
+  const all = threads.length === total;
+  return (
+    <div className="flex animate-fade-up items-center gap-1 rounded-xl bg-card px-1.5 py-1 shadow-card">
+      <Tooltip>
+        <TooltipTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Clear selection" onClick={onClear} />}>
+          <X />
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          Clear <kbd className="ml-1 rounded bg-background/20 px-1 font-mono text-[10px]">Esc</kbd>
+        </TooltipContent>
+      </Tooltip>
+      <span className="text-[13px] font-medium tabular-nums">{threads.length}</span>
+      {!all && (
+        <button type="button" onClick={onAll} className="ml-1 text-xs text-brand hover:underline">
+          All {total}
+        </button>
+      )}
+      <span className="ml-auto flex items-center">
+        {buttons.map((b) => (
+          <Tooltip key={b.label}>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={b.label}
+                  onClick={b.run}
+                  className={cn(b.destructive && "hover:text-destructive")}
+                />
+              }
+            >
+              <b.icon />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {b.label}
+              {b.keys && <kbd className="ml-1 rounded bg-background/20 px-1 font-mono text-[10px]">{b.keys}</kbd>}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+/** In the reading pane while threads are ticked: what is selected and what the keys do. */
+function SelectionPanel({
+  threads,
+  onClear,
+  setPicker,
+}: {
+  threads: ScoredThread[];
+  onClear: () => void;
+  setPicker: (picker: Picker) => void;
+}) {
+  const buttons = useBulkButtons(threads, onClear, setPicker);
+  const senders = [...new Set(threads.map((t) => t.messages[t.messages.length - 1].from.name))];
+  return (
+    <div className="desktop-drag flex flex-1 flex-col items-center justify-center gap-6 px-8 text-center">
+      <div className="space-y-1.5">
+        <p className="text-2xl font-semibold tracking-tight tabular-nums">
+          {threads.length === 1 ? "1 conversation" : `${threads.length} conversations`}
+        </p>
+        <p className="mx-auto max-w-sm truncate text-sm text-muted-foreground">
+          {senders.slice(0, 3).join(", ")}
+          {senders.length > 3 ? ` and ${senders.length - 3} more` : ""}
+        </p>
+      </div>
+      <div className="grid w-full max-w-sm grid-cols-2 gap-2">
+        {buttons.map((b) => (
+          <Button
+            key={b.label}
+            variant="outline"
+            onClick={b.run}
+            className={cn("justify-start gap-2.5 bg-card", b.destructive && "hover:text-destructive")}
+          >
+            <b.icon />
+            <span className="flex-1 text-left">{b.label}</span>
+            {b.keys && <kbd className="font-mono text-[11px] text-muted-foreground">{b.keys}</kbd>}
+          </Button>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        <kbd className="font-mono">x</kbd> to tick more · <kbd className="font-mono">⌘Z</kbd> to undo ·{" "}
+        <button type="button" onClick={onClear} className="hover:text-foreground">
+          <kbd className="font-mono">Esc</kbd> to clear
+        </button>
+      </p>
+    </div>
+  );
+}
+
+// Lower-cased search text per thread, keyed on its messages array, which only changes
+// when the mailbox is reloaded.
+const haystacks = new WeakMap<Message[], string>();
 
 function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint?: string }) {
   return (
@@ -256,7 +462,11 @@ export function InboxView({
 }) {
   const store = useStore();
   const { ready, scored, spaces, accounts, selectedId, select, setUnread } = store;
-  const [tab, setTab] = useState<InboxTab>(initialTab ?? "priority");
+  const [tab, setTabState] = useState<InboxTab>(initialTab ?? "priority");
+  // Threads ticked with x (or ⌘/⇧-click), and the row a ⇧-click range starts from.
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
+  const anchor = useRef<string | null>(null);
+  const [picker, setPicker] = useState<Picker>(null);
   const [query, setQuery] = useState("");
   const [emptying, setEmptying] = useState(false);
   const isDesktop = useIsDesktop();
@@ -274,29 +484,59 @@ export function InboxView({
     [scored, spaceId, accountId],
   );
 
+  // Typing stays responsive on a big mailbox: the list filters a beat behind the input.
+  const deferredQuery = useDeferredValue(query);
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     const list = filterThreads(inSpace, tab);
     if (!q) return list;
-    return list.filter((t) =>
-      [t.subject, t.snippet, ...t.messages.map((m) => `${m.from.name} ${m.from.email} ${m.body}`)]
-        .join(" ")
-        .toLowerCase()
-        .includes(q),
-    );
-  }, [inSpace, tab, query]);
+    return list.filter((t) => {
+      let text = haystacks.get(t.messages);
+      if (text === undefined) {
+        text = [t.subject, t.snippet, ...t.messages.map((m) => `${m.from.name} ${m.from.email} ${m.body}`)]
+          .join(" ")
+          .toLowerCase();
+        haystacks.set(t.messages, text);
+      }
+      return text.includes(q);
+    });
+  }, [inSpace, tab, deferredQuery]);
 
   const selected = inSpace.find((t) => t.id === selectedId) ?? null;
+  // Only what the list shows counts: a ticked thread that was archived or filtered out drops out.
+  const checked = useMemo(() => visible.filter((t) => checkedIds.has(t.id)), [visible, checkedIds]);
+  const clearChecked = useCallback(() => setCheckedIds(new Set()), []);
+  const setTab = useCallback((next: InboxTab) => {
+    setTabState(next);
+    setCheckedIds(new Set());
+  }, []);
+  const toggle = (id: string, range: boolean) => {
+    setCheckedIds((current) => {
+      const ids = new Set(current);
+      const from = anchor.current ? visible.findIndex((t) => t.id === anchor.current) : -1;
+      const to = visible.findIndex((t) => t.id === id);
+      if (range && from >= 0 && to >= 0) {
+        const [a, b] = from < to ? [from, to] : [to, from];
+        for (const t of visible.slice(a, b + 1)) ids.add(t.id);
+      } else if (ids.has(id)) ids.delete(id);
+      else ids.add(id);
+      return ids;
+    });
+    anchor.current = id;
+  };
 
+  // While several threads are ticked the reading pane shows the selection, so moving
+  // the cursor over a thread does not mean it was read.
+  const reading = !(isDesktop && checked.length > 1);
   useEffect(() => {
-    if (!selected?.id) {
+    if (!selected?.id || !reading) {
       openedId.current = null;
       return;
     }
     if (openedId.current === selected.id) return;
     openedId.current = selected.id;
     if (selected.unread) setUnread(selected.id, false);
-  }, [selected, setUnread]);
+  }, [selected, reading, setUnread]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -404,9 +644,17 @@ export function InboxView({
             <InboxShortcuts
               visible={visible}
               selected={selected}
+              checked={checked}
+              setChecked={setCheckedIds}
               query={query}
               setQuery={setQuery}
               searchRef={searchRef}
+              tabsShown={!folder}
+              setTab={setTab}
+              spaceId={spaceId}
+              accountId={accountId}
+              picker={picker}
+              setPicker={setPicker}
             />
           </div>
           <div className="relative">
@@ -456,6 +704,15 @@ export function InboxView({
             })}
           </div>
           )}
+          {checked.length > 0 && (
+            <SelectionBar
+              threads={checked}
+              total={visible.length}
+              onAll={() => setCheckedIds(new Set(visible.map((t) => t.id)))}
+              onClear={clearChecked}
+              setPicker={setPicker}
+            />
+          )}
         </div>
 
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
@@ -485,8 +742,11 @@ export function InboxView({
                   key={t.id}
                   thread={t}
                   selected={t.id === selectedId}
+                  checked={checkedIds.has(t.id)}
+                  selecting={checked.length > 0}
                   showSpace={spaceId === "all"}
                   onSelect={() => select(t.id)}
+                  onToggle={(range) => toggle(t.id, range)}
                 />
               ))}
             </ul>
@@ -496,7 +756,9 @@ export function InboxView({
 
       {isDesktop ? (
         <section className="hidden h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-surface lg:flex lg:flex-col">
-          {selected ? (
+          {checked.length > 1 ? (
+            <SelectionPanel threads={checked} onClear={clearChecked} setPicker={setPicker} />
+          ) : selected ? (
             <ThreadView thread={selected} />
           ) : (
             <div className="desktop-drag flex flex-1 flex-col items-center justify-center gap-4 text-center">

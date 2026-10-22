@@ -51,3 +51,6 @@ next-env.d.ts
 /desktop/dist
 /desktop/cache
 /desktop/build
+
+# local test mail server and its Java runtime (npm run dev:setup)
+/.dev

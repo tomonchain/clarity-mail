@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev -p 4317",
     "dev:all": "concurrently -k -n web,sync \"next dev -p 4317 -H 0.0.0.0\" \"tsx src/worker/index.ts\"",
+    "dev:local": "node scripts/dev-local.mjs",
+    "dev:setup": "node scripts/dev-setup.mjs",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p ${PORT:-4317}",
     "worker": "tsx src/worker/index.ts",
@@ -14,9 +16,12 @@
     "test:detect": "tsx scripts/test-detect.ts",
     "test:vault": "tsx scripts/test-vault.ts",
     "test:push": "tsx scripts/test-push.ts",
+    "test:sync": "tsx scripts/test-sync.ts",
     "bootstrap": "tsx scripts/dev-bootstrap.ts",
     "desktop:build": "node desktop/build.mjs",
-    "desktop:install": "node desktop/build.mjs --install"
+    "desktop:install": "node desktop/build.mjs --install",
+    "mobile:ios": "npm --prefix mobile run ios",
+    "mobile:android": "npm --prefix mobile run android"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

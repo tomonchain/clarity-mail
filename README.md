@@ -11,7 +11,7 @@ One server holds the mail. The phone and a browser on the Mac read that same cop
 - **Spaces and unified inbox**: per-space and all-inbox views with Priority, Recent, To answer, Noise, Snoozed, and Done, plus search.
 - **Actions on the server**: done, snooze, star, read or unread, move to another space, reply from the account the mail was sent to, write a new message, and forward.
 - **Reading**: the mailbox list and the open message scroll on their own. HTML mail keeps its layout (scripts stripped). Markdown mail is rendered when the body looks like Markdown.
-- **Keyboard**: in the inbox, `j` / `k` move, `Enter` opens, `Esc` closes, `e` done, `s` star, `u` unread, `r` reply, `z` snooze until tomorrow morning, `/` search, `?` the shortcut list. In the composer, `⌘ Enter` sends.
+- **Keyboard**: tick conversations with `x` (`⇧ j` / `⇧ k` extend, `⌘ A` or `* a` all, `* u` unread), then act on all of them at once: `e` archive, `#` delete, `!` spam, `z` snooze until tomorrow, `⇧ Z` snooze until…, `v` move to a space, `s` star, `u` read / unread, `⌘ Z` undo. Without a selection the same keys act on the open conversation. `j` / `k` move, `1`–`4` switch Priority / Recent / To answer / Noise, `g i`, `g s`, `g e`… go to a folder, `/` search, `?` the full list. In the composer, `⌘ Enter` sends.
 - **Accounts you add yourself**: iCloud and Gmail (app-specific password), OVH MX Plan (`ssl0.ovh.net`), or any other address. Type the email and Clarity Mail finds its servers: known domains first, then the domain's MX record (Google Workspace, iCloud+ custom domains, OVH, Microsoft 365, Zoho, Fastmail, Yahoo, Gandi, Infomaniak), then Thunderbird's public server list, then an `imap.` / `smtp.` guess. Hosts and ports stay editable. Spaces and routing rules stay editable.
 - **Triage**: newsletters, receipts, notifications, and questions are classified from headers and wording. Set `DEEPSEEK_API_KEY` (or `MISTRAL_API_KEY`) and new threads also get a one-sentence summary.
 
@@ -42,14 +42,18 @@ Add a mailbox from **Settings**. Presets:
 
 ### Local test mailbox
 
-A GreenMail server on this machine can stand in for iCloud and OVH. With it listening on IMAP `127.0.0.1:3143` and SMTP `127.0.0.1:3025`, and a user `sorted-test@test.local` / `secret`:
+For day-to-day testing, one command runs everything:
 
 ```bash
-SORTED_DEV_LOGIN_HINT=1 npm run bootstrap
-SORTED_DEV_LOGIN_HINT=1 npm run dev:all
+npm run dev:setup   # once: downloads GreenMail and a Java runtime into .dev/
+npm run dev:local
 ```
 
-The sign-in page then shows the dev password (`sorted-dev` unless `SORTED_DEV_PASSWORD` is set). The Brief says the account is a local test mailbox. Leave `SORTED_DEV_LOGIN_HINT` unset on any real server.
+`dev:local` starts a GreenMail server on IMAP `127.0.0.1:3143` and SMTP `127.0.0.1:3025`. It stands in for iCloud and OVH. The command then creates the login on first run, fills a test mailbox (`sorted-test@test.local`), and starts the website on http://localhost:4317 together with the sync. Everything Clarity stores stays in `./data`. The login, its 30-day session and any real accounts you add are kept between runs. GreenMail keeps its mail in memory, so each start fills the test mailbox again and reconnects it. To start from scratch, delete `./data`.
+
+The sign-in page shows the dev password (`sorted-dev` unless `SORTED_DEV_PASSWORD` is set) as long as it is this mailbox's password. The Brief says the account is a local test mailbox. Leave `SORTED_DEV_LOGIN_HINT` unset on any real server.
+
+With your own GreenMail already running, `SORTED_DEV_LOGIN_HINT=1 npm run bootstrap` then `SORTED_DEV_LOGIN_HINT=1 npm run dev:all` does the same in two steps.
 
 `npm run test:mail` runs the sync, archive, and reply checks against that same GreenMail server, in a throwaway data directory.
 
@@ -82,6 +86,25 @@ DEEPSEEK_API_KEY=your-key
 
 Reopen the app after saving the file. `MISTRAL_API_KEY` is the fallback. Without either, triage stays on header and phrase rules.
 
+## iPhone and Android app
+
+`mobile/` is a [Capacitor](https://capacitorjs.com) app: a native shell that opens your Clarity server. A phone cannot run the server itself, so unlike the Mac app it keeps no mail of its own. It is the same interface as the website, with an app icon, a splash screen, a status bar that follows the theme, and Android's back button closing the open conversation first.
+
+Requirements: Xcode (iPhone) or Android Studio (Android), and a Clarity server reachable over HTTPS (see "Run it on a VPS").
+
+```bash
+cd mobile
+npm install
+cp .env.example .env   # set CLARITY_SERVER_URL=https://clarity.example.com
+npm run ios            # or: npm run android
+```
+
+`npm run ios` / `npm run android` redraw the icons and splash screens (`mobile/assets.mjs`, same mark as the Mac app), copy the server address into the native projects (`cap sync`), and open Xcode or Android Studio. Run the app from there on a device or simulator. From the repository root, `npm run mobile:ios` and `npm run mobile:android` do the same.
+
+Plain `http://` is accepted only for a server on your own network (`192.168.…`, `10.…`, `localhost`), for testing. Without an address, the app shows how to set one.
+
+On an iPhone, a free Apple ID lets Xcode install the app for 7 days; the Apple Developer Program (99 USD/year) removes that limit and allows TestFlight. App Store review usually refuses apps that only wrap a website, so plan on TestFlight or direct installs for personal use.
+
 ## Run it on a VPS
 
 ```bash
@@ -104,6 +127,7 @@ The container listens on port 4317 and keeps the database in the `sorted-data` v
 | `src/app/api/` | Session, state, and mutations |
 | `src/components/brief.tsx` | Brief homescreen |
 | `desktop/` | macOS app shell and the script that packs Clarity Mail.app |
+| `mobile/` | iPhone and Android app (Capacitor) that opens your Clarity server |
 | `docs/PLAN.md` | Decisions and what is still later (iPhone, menu-bar extras) |
 
 Stack: Next.js 16 (App Router), TypeScript, Tailwind CSS 4, shadcn/ui, SQLite, imapflow, nodemailer.

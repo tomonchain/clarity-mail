@@ -143,7 +143,7 @@ function MessageCard({
         <time className="shrink-0 pt-0.5 text-xs text-muted-foreground">{fullDate(message.sentAt)}</time>
       </header>
       <div className="px-5 pb-5">
-        <MailBody body={message.body} html={message.html} sender={message.from.email} />
+        <MailBody messageId={message.id} body={message.body} hasHtml={message.hasHtml} sender={message.from.email} />
       </div>
     </section>
   );

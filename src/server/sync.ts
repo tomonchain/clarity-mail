@@ -214,6 +214,7 @@ async function syncFolder(
   account: MailAccount,
   folder: string,
   dirty: Set<string>,
+  touched: Set<string>,
   deletes: { folder: string; uid: number }[],
 ) {
   const db = getDb();
@@ -257,7 +258,6 @@ async function syncFolder(
           prior?.thread_id ??
           findThread(account.id, inReplyTo, referenceIds(parsed)) ??
           newThreadId(messageId);
-        if (prior) db.prepare("DELETE FROM messages WHERE id = ?").run(prior.id);
         const from = parsed.from?.value?.[0];
         const internal = msg.internalDate instanceof Date ? msg.internalDate.getTime() : Date.now();
         const auto = String(parsed.headers.get("auto-submitted") ?? "").toLowerCase();
@@ -268,33 +268,37 @@ async function syncFolder(
           parsed.headerLines.some((line) => line.key.toLowerCase() === "list-unsubscribe");
         const rowId = prior?.id ?? randomUUID();
         const stored = mailBody(parsed, rowId);
-        db.prepare(
-          `INSERT INTO messages (
-             id, account_id, thread_id, folder, uid, message_id, in_reply_to, from_name, from_email,
-             to_json, subject, sent_at, body, html, html_rev, seen, flagged, list_unsub, auto_submitted
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          rowId,
-          account.id,
-          threadId,
-          folder,
-          msg.uid,
-          messageId,
-          inReplyTo,
-          from?.name || from?.address || "Unknown",
-          (from?.address || "unknown@unknown").toLowerCase(),
-          JSON.stringify(addressList(parsed.to)),
-          parsed.subject || "(no subject)",
-          parsed.date?.getTime() || internal,
-          stored.text,
-          stored.html,
-          HTML_REV,
-          hasFlag(msg.flags, "\\Seen") ? 1 : 0,
-          hasFlag(msg.flags, "\\Flagged") ? 1 : 0,
-          listUnsub ? 1 : 0,
-          auto && auto !== "no" ? 1 : 0,
-        );
-        saveImages(rowId, stored.images);
+        // The message and its pictures land together, or not at all.
+        db.transaction(() => {
+          if (prior) db.prepare("DELETE FROM messages WHERE id = ?").run(prior.id);
+          db.prepare(
+            `INSERT INTO messages (
+               id, account_id, thread_id, folder, uid, message_id, in_reply_to, from_name, from_email,
+               to_json, subject, sent_at, body, html, html_rev, seen, flagged, list_unsub, auto_submitted
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            rowId,
+            account.id,
+            threadId,
+            folder,
+            msg.uid,
+            messageId,
+            inReplyTo,
+            from?.name || from?.address || "Unknown",
+            (from?.address || "unknown@unknown").toLowerCase(),
+            JSON.stringify(addressList(parsed.to)),
+            parsed.subject || "(no subject)",
+            parsed.date?.getTime() || internal,
+            stored.text,
+            stored.html,
+            HTML_REV,
+            hasFlag(msg.flags, "\\Seen") ? 1 : 0,
+            hasFlag(msg.flags, "\\Flagged") ? 1 : 0,
+            listUnsub ? 1 : 0,
+            auto && auto !== "no" ? 1 : 0,
+          );
+          saveImages(rowId, stored.images);
+        })();
         dirty.add(threadId);
       }
     }
@@ -302,18 +306,21 @@ async function syncFolder(
     const existing = remote.filter((uid) => known.has(uid));
     if (existing.length > 0) {
       const flagged = await client.fetchAll(existing, { uid: true, flags: true }, { uid: true });
+      // Only rows whose flags really changed are written, and their threads rebuilt.
       const update = db.prepare(
-        "UPDATE messages SET seen = ?, flagged = ? WHERE account_id = ? AND folder = ? AND uid = ?",
+        `UPDATE messages SET seen = ?, flagged = ? WHERE account_id = ? AND folder = ? AND uid = ?
+         AND (seen != ? OR flagged != ?) RETURNING thread_id`,
       );
-      for (const msg of flagged) {
-        update.run(
-          hasFlag(msg.flags, "\\Seen") ? 1 : 0,
-          hasFlag(msg.flags, "\\Flagged") ? 1 : 0,
-          account.id,
-          folder,
-          msg.uid,
-        );
-      }
+      db.transaction(() => {
+        for (const msg of flagged) {
+          const seen = hasFlag(msg.flags, "\\Seen") ? 1 : 0;
+          const star = hasFlag(msg.flags, "\\Flagged") ? 1 : 0;
+          const row = update.get(seen, star, account.id, folder, msg.uid, seen, star) as
+            | { thread_id: string }
+            | undefined;
+          if (row) touched.add(row.thread_id);
+        }
+      })();
     }
 
     // Bodies not downloaded yet, or stored before embedded images were kept: newest first.
@@ -341,17 +348,20 @@ async function syncFolder(
     }
     if (pending.length > 0) {
       const older = await client.fetchAll(pending, { uid: true, source: true }, { uid: true });
-      const idOf = db.prepare("SELECT id FROM messages WHERE account_id = ? AND folder = ? AND uid = ?");
+      const idOf = db.prepare("SELECT id, thread_id FROM messages WHERE account_id = ? AND folder = ? AND uid = ?");
       const fill = db.prepare(
         "UPDATE messages SET html = ?, html_rev = ?, body = CASE WHEN body = '' THEN ? ELSE body END WHERE id = ?",
       );
       for (const msg of older) {
         if (!msg.source) continue;
-        const row = idOf.get(account.id, folder, msg.uid) as { id: string } | undefined;
+        const row = idOf.get(account.id, folder, msg.uid) as { id: string; thread_id: string } | undefined;
         if (!row) continue;
         const stored = mailBody(await parseMail(msg.source), row.id);
-        fill.run(stored.html, HTML_REV, stored.text, row.id);
-        saveImages(row.id, stored.images);
+        db.transaction(() => {
+          fill.run(stored.html, HTML_REV, stored.text, row.id);
+          saveImages(row.id, stored.images);
+        })();
+        touched.add(row.thread_id);
       }
     }
 
@@ -375,6 +385,9 @@ export type SyncOptions = {
 // Accounts that got a push while a sync was already running: sync their inbox again after.
 const again = new Set<string>();
 
+const FULL_RECOMPUTE_MS = 15 * 60_000;
+const lastFullRecompute = new Map<string, number>();
+
 export async function syncAccount(id: string, options: SyncOptions = {}) {
   return holdDb(() => syncAccountHeld(id, options));
 }
@@ -397,11 +410,12 @@ async function syncAccountHeld(id: string, options: SyncOptions) {
   try {
     const account = loadAccount(id);
     const dirty = new Set<string>();
+    const touched = new Set<string>();
     const deletes: { folder: string; uid: number }[] = [];
     const inbox = options.inboxOnly ? folderPath(id, "inbox") : null;
     await withImap(account, async (client) => {
       if (inbox) {
-        await syncFolder(client, account, inbox, dirty, deletes);
+        await syncFolder(client, account, inbox, dirty, touched, deletes);
         return;
       }
       await refreshMailboxes(client, id);
@@ -411,7 +425,7 @@ async function syncAccountHeld(id: string, options: SyncOptions) {
         )
         .all(id) as { path: string }[];
       for (const folder of folders) {
-        await syncFolder(client, account, folder.path, dirty, deletes);
+        await syncFolder(client, account, folder.path, dirty, touched, deletes);
       }
     });
 
@@ -419,20 +433,30 @@ async function syncAccountHeld(id: string, options: SyncOptions) {
       "SELECT thread_id FROM messages WHERE account_id = ? AND folder = ? AND uid = ?",
     );
     const remove = db.prepare("DELETE FROM messages WHERE account_id = ? AND folder = ? AND uid = ?");
-    for (const gone of deletes) {
-      const row = select.get(id, gone.folder, gone.uid) as { thread_id: string } | undefined;
-      if (!row) continue;
-      dirty.add(row.thread_id);
-      remove.run(id, gone.folder, gone.uid);
-    }
+    db.transaction(() => {
+      for (const gone of deletes) {
+        const row = select.get(id, gone.folder, gone.uid) as { thread_id: string } | undefined;
+        if (!row) continue;
+        dirty.add(row.thread_id);
+        remove.run(id, gone.folder, gone.uid);
+      }
+    })();
     if (deletes.length > 0) dropOrphanImages();
 
-    recomputeAccount(id, dirty);
+    // Rebuild only the threads this sync changed. A full pass now and then is the safety net
+    // (folder roles renamed on the server, aliases edited in Settings).
+    const full = !options.inboxOnly && Date.now() - (lastFullRecompute.get(id) ?? 0) > FULL_RECOMPUTE_MS;
+    if (full) {
+      recomputeAccount(id, dirty);
+      lastFullRecompute.set(id, Date.now());
+    } else {
+      recomputeAccount(id, dirty, new Set([...dirty, ...touched]));
+    }
     // Show new mail now; the AI category and summary follow.
-    if (dirty.size > 0) bumpRevision();
-    await triageAccount(id);
+    if (dirty.size > 0 || touched.size > 0) bumpRevision();
+    // The sync time alone reaches the app through /api/revision, without a full reload.
+    if ((await triageAccount(id)) > 0) bumpRevision();
     db.prepare("UPDATE accounts SET last_sync_at = ?, sync_error = NULL WHERE id = ?").run(Date.now(), id);
-    bumpRevision();
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sync failed";
     db.prepare("UPDATE accounts SET sync_error = ? WHERE id = ?").run(message.slice(0, 500), id);

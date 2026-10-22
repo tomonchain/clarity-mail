@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { looksLikeMarkdown } from "@/lib/mail-format";
 import { imagesAllowed, trustSender, useImagePrefs } from "@/lib/privacy";
 
@@ -140,8 +141,65 @@ function HtmlFrame({ html, sender }: { html: string; sender?: string }) {
   );
 }
 
-export function MailBody({ body, html, sender }: { body: string; html?: string; sender?: string }) {
+// Opened messages keep their HTML for the session, so going back to one is instant.
+const htmlCache = new Map<string, Promise<string>>();
+const HTML_CACHE_SIZE = 150;
+
+function loadHtml(id: string): Promise<string> {
+  const cached = htmlCache.get(id);
+  if (cached) return cached;
+  const request = fetch(`/api/messages/${encodeURIComponent(id)}`, { cache: "no-store" }).then(async (res) => {
+    if (!res.ok) throw new Error("Could not load this message.");
+    return ((await res.json()) as { html?: string }).html ?? "";
+  });
+  htmlCache.set(id, request);
+  // A failed load is tried again the next time the message is opened.
+  request.catch(() => htmlCache.delete(id));
+  if (htmlCache.size > HTML_CACHE_SIZE) htmlCache.delete(htmlCache.keys().next().value!);
+  return request;
+}
+
+function useMessageHtml(id: string, enabled: boolean) {
+  const [loaded, setLoaded] = useState<{ id: string; html: string | null } | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    loadHtml(id).then(
+      (html) => live && setLoaded({ id, html }),
+      // The plain text part is shown instead.
+      () => live && setLoaded({ id, html: null }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [id, enabled]);
+  if (!enabled) return { pending: false, html: null };
+  if (loaded?.id !== id) return { pending: true, html: null };
+  return { pending: false, html: loaded.html };
+}
+
+export function MailBody({
+  messageId,
+  body,
+  hasHtml = false,
+  sender,
+}: {
+  messageId: string;
+  body: string;
+  hasHtml?: boolean;
+  sender?: string;
+}) {
   const prefs = useImagePrefs();
+  const { pending, html } = useMessageHtml(messageId, hasHtml);
+  if (pending) {
+    return (
+      <div className="space-y-2.5 py-1" aria-busy="true">
+        <Skeleton className="h-3.5 w-11/12" />
+        <Skeleton className="h-3.5 w-full" />
+        <Skeleton className="h-3.5 w-4/5" />
+      </div>
+    );
+  }
   if (html?.trim()) return <HtmlFrame html={html} sender={sender} />;
 
   if (looksLikeMarkdown(body)) {

@@ -122,9 +122,11 @@ Known limits of a web app on iOS:
 - No share-sheet extension ("share to Clarity Mail"), no Siri, no widgets.
 - Notifications need a one-time permission from inside the installed app.
 
-### iPhone (later, if those limits bother you): native wrapper
+### iPhone and Android: native wrapper (started)
 
-Wrap the same UI with Capacitor or Tauri 2 (both can target iOS). This adds widgets, a share extension and better background behaviour. Costs: the Apple Developer Program (99 USD/year) to install it on your phone for more than 7 days, and becoming the default mail app also needs a specific entitlement approved by Apple. Worth revisiting after a few weeks with the PWA.
+`mobile/` wraps the same UI with Capacitor for iOS and Android; it opens the deployed server (see the README). Next steps there: native push (APNs / FCM) from the sync worker, a share extension, and widgets.
+
+The original note: This adds widgets, a share extension and better background behaviour. Costs: the Apple Developer Program (99 USD/year) to install it on your phone for more than 7 days, and becoming the default mail app also needs a specific entitlement approved by Apple. Worth revisiting after a few weeks with the PWA.
 
 ### macOS
 

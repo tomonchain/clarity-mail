@@ -37,7 +37,7 @@ function snippet(body: string) {
 }
 
 /** Rebuild one thread from its messages. A dirty thread is queued for triage again. */
-export function recomputeThread(threadId: string, dirty = false) {
+export function recomputeThread(threadId: string, dirty = false, own?: Set<string>) {
   const db = getDb();
   const msgs = messagesForThread(threadId);
   const prev = db.prepare("SELECT * FROM threads WHERE id = ?").get(threadId) as ThreadRow | undefined;
@@ -58,7 +58,7 @@ export function recomputeThread(threadId: string, dirty = false) {
   const status = keepSnooze ? "snoozed" : filed;
   const unread = status === "inbox" && msgs.some((m) => m.role === "inbox" && m.seen === 0) ? 1 : 0;
   const starred = msgs.some((m) => m.flagged === 1) ? 1 : 0;
-  const mine = ownAddresses(first.account_id);
+  const mine = own ?? ownAddresses(first.account_id);
   const awaiting = status === "inbox" && mine.has(last.from_email.toLowerCase()) ? 1 : 0;
   const triaged = dirty ? 0 : (prev?.triaged ?? 0);
   const summary = dirty ? null : (prev?.summary ?? null);
@@ -101,17 +101,25 @@ export function recomputeThread(threadId: string, dirty = false) {
   });
 }
 
-export function recomputeAccount(accountId: string, dirty: Set<string> = new Set()) {
+/**
+ * Rebuild an account's threads in one transaction. With `only`, just those threads are
+ * rebuilt (plus threads that lost every message); without it, all of them.
+ */
+export function recomputeAccount(accountId: string, dirty: Set<string> = new Set(), only?: Set<string>) {
   const db = getDb();
-  const ids = db
-    .prepare("SELECT DISTINCT thread_id AS id FROM messages WHERE account_id = ?")
-    .all(accountId) as { id: string }[];
-  const keep = new Set(ids.map((r) => r.id));
-  for (const id of keep) recomputeThread(id, dirty.has(id));
-  const existing = db.prepare("SELECT id FROM threads WHERE account_id = ?").all(accountId) as { id: string }[];
-  for (const row of existing) {
-    if (!keep.has(row.id)) db.prepare("DELETE FROM threads WHERE id = ?").run(row.id);
-  }
+  const own = ownAddresses(accountId);
+  db.transaction(() => {
+    const ids = only
+      ? [...only]
+      : (db.prepare("SELECT DISTINCT thread_id AS id FROM messages WHERE account_id = ?").all(accountId) as {
+          id: string;
+        }[]).map((r) => r.id);
+    for (const id of ids) recomputeThread(id, dirty.has(id), own);
+    db.prepare(
+      `DELETE FROM threads WHERE account_id = ?
+       AND id NOT IN (SELECT DISTINCT thread_id FROM messages WHERE account_id = ?)`,
+    ).run(accountId, accountId);
+  })();
 }
 
 export function findThread(accountId: string, inReplyTo: string, references: string[]): string | null {

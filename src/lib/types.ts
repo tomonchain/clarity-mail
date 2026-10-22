@@ -44,8 +44,8 @@ export type Message = {
   to: string[];
   sentAt: number;
   body: string;
-  /** Sanitized HTML, when the message had an HTML part. */
-  html?: string;
+  /** The message has an HTML part, loaded on demand from /api/messages/[id]. */
+  hasHtml?: boolean;
   /** Role of the IMAP folder holding it: inbox, sent, archive, trash, junk or other. */
   folder?: string;
 };

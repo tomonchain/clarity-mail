@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { Wordmark } from "@/components/brand";
 import { DesktopBridge } from "@/components/desktop-bridge";
+import { NativeBridge } from "@/components/native-bridge";
 import { toast } from "sonner";
 import { FOLDERS, folderOf } from "@/lib/folders";
 import { Button } from "@/components/ui/button";
@@ -357,6 +358,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <ComposeProvider>
       <DesktopBridge />
+      <NativeBridge />
       <div className="flex h-dvh w-full overflow-hidden bg-background">
         <aside
           className={cn(
