@@ -1,0 +1,25 @@
+{
+  "name": "clarity-mail-mobile",
+  "version": "1.0.0-beta.1",
+  "private": true,
+  "description": "Clarity Mail for iPhone and Android: a native shell around your Clarity server",
+  "scripts": {
+    "sync": "node assets.mjs && cap sync",
+    "ios": "npm run sync && cap open ios",
+    "android": "npm run sync && cap open android",
+    "run:ios": "npm run sync && cap run ios",
+    "run:android": "npm run sync && cap run android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.2",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/ios": "8.5.2",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2",
+    "typescript": "^5"
+  }
+}

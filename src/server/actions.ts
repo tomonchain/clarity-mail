@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ImapFlow } from "imapflow";
 import MailComposer from "nodemailer/lib/mail-composer";
-import { dropOrphanImages, getDb, type MessageRow, type ThreadRow } from "./db";
+import { bumpRevision, dropOrphanImages, getDb, type MessageRow, type ThreadRow } from "./db";
 import { loadAccount, smtpTransport, withImap, type MailAccount } from "./connection";
 import { ensureFolder, folderPath, refreshMailboxes, type FolderRole } from "./sync";
 import { messageId, messagesForThread, ownAddresses, recomputeThread } from "./threads";
@@ -124,11 +124,19 @@ export async function wakeSnoozes() {
   const due = getDb()
     .prepare("SELECT id FROM threads WHERE status = 'snoozed' AND snoozed_until IS NOT NULL AND snoozed_until <= ?")
     .all(Date.now()) as { id: string }[];
+  let woke = 0;
   for (const row of due) {
-    await setThreadStatus(row.id, "inbox");
-    const latest = messagesForThread(row.id).at(-1);
-    if (latest) await setMessageFlag(latest.id, "\\Seen", false);
+    // One mailbox being unreachable must not keep the other snoozes asleep.
+    try {
+      await setThreadStatus(row.id, "inbox");
+      woke += 1;
+      const latest = messagesForThread(row.id).at(-1);
+      if (latest) await setMessageFlag(latest.id, "\\Seen", false);
+    } catch (err) {
+      console.error("[snooze]", row.id, err instanceof Error ? err.message : err);
+    }
   }
+  if (woke > 0) bumpRevision();
 }
 
 export async function setMessageFlag(id: string, flag: "\\Seen" | "\\Flagged", add: boolean) {

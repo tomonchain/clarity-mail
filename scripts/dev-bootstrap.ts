@@ -96,19 +96,22 @@ async function main() {
     console.log("created the dev login");
   }
 
-  const count = await inboxCount();
-  if (count === 0) {
-    await seedMail();
-    console.log("sent sample mail to the local mailbox");
-  }
-
   const existing = getDb().prepare("SELECT id FROM accounts WHERE email = ?").get(MAILBOX) as
     | { id: string }
     | undefined;
-  if (existing) {
+
+  // GreenMail keeps mail in memory: an empty inbox means the server restarted, so the
+  // copy Clarity holds no longer matches it and the account is connected again.
+  const fresh = (await inboxCount()) === 0;
+  if (fresh) {
+    await seedMail();
+    console.log("sent sample mail to the local mailbox");
+  }
+  if (existing && !fresh) {
     console.log("local mailbox already connected", existing.id);
     return;
   }
+  if (existing) await mutate({ op: "account.delete", id: existing.id });
 
   const created = await mutate({
     op: "account.create",

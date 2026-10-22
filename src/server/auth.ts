@@ -47,6 +47,19 @@ export function checkPassword(password: string): boolean {
   return true;
 }
 
+// Hashing a password costs about 200 ms, so the answer is kept until the stored hash changes.
+let devCheck: { hash: string; password: string; works: boolean } | null = null;
+
+/** Dev only: whether the dev password signs in to this mailbox, for the hint on the sign-in page. */
+export function devPasswordWorks(password: string): boolean {
+  const stored = storedHash();
+  if (!stored) return false;
+  if (devCheck?.hash !== stored || devCheck.password !== password) {
+    devCheck = { hash: stored, password, works: password.length <= 512 && verifyPassword(password, stored) };
+  }
+  return devCheck.works;
+}
+
 export function startSession(password: string): string | null {
   if (!checkPassword(password)) return null;
   return issueSession();

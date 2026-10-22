@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Clarity Mail</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #f4f5f7; --fg: #1d1d1f; --muted: #6b6f76; --card: #fff; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #16171b; --fg: #f2f2f4; --muted: #9a9ea6; --card: #1f2026; } }
+      body {
+        margin: 0; min-height: 100dvh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+        font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        padding: env(safe-area-inset-top) 24px env(safe-area-inset-bottom);
+      }
+      main { max-width: 22rem; background: var(--card); border-radius: 18px; padding: 28px 24px; }
+      h1 { font-size: 20px; margin: 0 0 8px; }
+      p { margin: 0 0 12px; color: var(--muted); }
+      code { font: 13px ui-monospace, Menlo, monospace; color: var(--fg); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>No Clarity server yet</h1>
+      <p>This app opens your Clarity Mail server. Your mail stays there, not on the phone.</p>
+      <p>On your Mac, put <code>CLARITY_SERVER_URL=https://…</code> in <code>mobile/.env</code>, then run <code>npm run sync</code> in <code>mobile/</code> and rebuild the app.</p>
+    </main>
+  </body>
+</html>

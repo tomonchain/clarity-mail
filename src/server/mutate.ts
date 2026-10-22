@@ -17,6 +17,7 @@ import { mailAccount, testLogin } from "./connection";
 import { bumpRevision, dropOrphanImages, getDb, type AccountRow } from "./db";
 import { detectSettings } from "./detect";
 import { syncAccount } from "./sync";
+import { recomputeAccount } from "./threads";
 
 /** Sync soon after sending so the sent mail shows up in its thread. */
 function syncSoon(accountId: string) {
@@ -200,6 +201,8 @@ export async function mutate(body: unknown): Promise<unknown> {
         db.prepare(
           "UPDATE accounts SET label = ?, default_space = ?, aliases = ?, secret = ? WHERE id = ?",
         ).run(input.label ?? row.label, input.defaultSpace ?? row.default_space, aliases, secret, input.id);
+        // "Waiting on others" depends on which addresses are yours.
+        if (aliases !== row.aliases) recomputeAccount(input.id);
         if (input.password && row.sync_error) syncSoon(input.id);
         return saved({ ok: true });
       }
@@ -277,6 +280,54 @@ export async function mutate(body: unknown): Promise<unknown> {
           throw new ApiError(err instanceof Error ? err.message : "Could not detect the servers.");
         }
       }
+      case "thread.bulk": {
+        const { ids, action } = parse(
+          z.object({
+            ids: z.array(z.string()).min(1).max(500),
+            action: z.discriminatedUnion("kind", [
+              z.object({
+                kind: z.literal("status"),
+                status: z.enum(["inbox", "done", "snoozed", "trash", "spam"]),
+                snoozedUntil: z.number().optional(),
+              }),
+              z.object({ kind: z.literal("read"), unread: z.boolean() }),
+              z.object({ kind: z.literal("star"), starred: z.boolean() }),
+              z.object({ kind: z.literal("move"), space: z.string() }),
+            ]),
+          }),
+          body,
+        );
+        if (action.kind === "move") {
+          const move = db.prepare("UPDATE threads SET space_override = ? WHERE id = ?");
+          db.transaction(() => {
+            for (const id of ids) move.run(action.space, id);
+          })();
+          return saved({ ok: true, failed: 0 });
+        }
+        const apply = (id: string) => {
+          if (action.kind === "status") return setThreadStatus(id, action.status, action.snoozedUntil);
+          if (action.kind === "read") return setThreadUnread(id, action.unread);
+          return setThreadStar(id, action.starred);
+        };
+        // Each thread opens its own IMAP connection and mail servers cap them per account,
+        // so only a few run at once. One thread failing does not stop the others.
+        let failed = 0;
+        let lastError: unknown = null;
+        const queue = [...ids];
+        const worker = async () => {
+          for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+            try {
+              await apply(id);
+            } catch (err) {
+              failed += 1;
+              lastError = err;
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
+        if (failed === ids.length) failAction(lastError);
+        return saved({ ok: true, failed });
+      }
       case "thread.clear": {
         const { ids } = parse(z.object({ ids: z.array(z.string()).max(200) }), body);
         for (const id of ids) await setThreadStatus(id, "done");
@@ -300,14 +351,17 @@ export async function mutate(body: unknown): Promise<unknown> {
                   snoozedUntil: z.number().optional(),
                 }),
               )
-              .max(200),
+              .max(500),
           }),
           body,
         );
+        const current = db.prepare("SELECT unread, starred FROM threads WHERE id = ?");
         for (const thread of threads) {
           await setThreadStatus(thread.id, thread.status, thread.snoozedUntil);
-          await setThreadUnread(thread.id, thread.unread);
-          await setThreadStar(thread.id, thread.starred);
+          // Undoing a bulk action touches many threads: flags that did not change cost no round trip.
+          const now = current.get(thread.id) as { unread: number; starred: number } | undefined;
+          if (!now || Boolean(now.unread) !== thread.unread) await setThreadUnread(thread.id, thread.unread);
+          if (!now || Boolean(now.starred) !== thread.starred) await setThreadStar(thread.id, thread.starred);
         }
         return saved({ ok: true });
       }

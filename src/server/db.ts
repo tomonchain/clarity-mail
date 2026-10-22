@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS inline_images (
 );
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS messages_msgid ON messages(account_id, message_id);
+CREATE INDEX IF NOT EXISTS threads_account ON threads(account_id, triaged);
 `;
 
 function seedDefaults(db: Database.Database) {
@@ -288,7 +289,7 @@ function removeSidecarFiles(file: string) {
 function restrictToOwner(target: string, mode: number) {
   for (const candidate of [target, `${target}-wal`, `${target}-shm`]) {
     try {
-      if (existsSync(candidate)) chmodSync(candidate, mode);
+      if (existsSync(/*turbopackIgnore: true*/ candidate)) chmodSync(/*turbopackIgnore: true*/ candidate, mode);
     } catch {
       // A read-only volume keeps its modes; the database is encrypted anyway.
     }

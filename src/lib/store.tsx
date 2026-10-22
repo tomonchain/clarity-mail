@@ -14,6 +14,31 @@ type Data = {
   notice: string | null;
 };
 
+/** One change applied to many threads at once (multi-select). */
+export type BulkAction =
+  | { kind: "status"; status: ThreadStatus; snoozedUntil?: number }
+  | { kind: "read"; unread: boolean }
+  | { kind: "star"; starred: boolean }
+  | { kind: "move"; space: SpaceId };
+
+function applyBulk(thread: Thread, action: BulkAction): Thread {
+  switch (action.kind) {
+    case "status":
+      return {
+        ...thread,
+        status: action.status,
+        snoozedUntil: action.snoozedUntil,
+        unread: action.status === "inbox" ? thread.unread : false,
+      };
+    case "read":
+      return { ...thread, unread: action.unread };
+    case "star":
+      return { ...thread, starred: action.starred };
+    case "move":
+      return { ...thread, spaceOverride: action.space };
+  }
+}
+
 type Store = Data & {
   ready: boolean;
   error: string | null;
@@ -25,6 +50,7 @@ type Store = Data & {
   toggleStar: (id: string) => void;
   setUnread: (id: string, unread: boolean) => void;
   moveToSpace: (id: string, space: SpaceId) => void;
+  bulk: (ids: string[], action: BulkAction) => void;
   reply: (id: string, from: string, body: string) => Promise<void>;
   clearThreads: (ids: string[]) => void;
   purgeThreads: (ids: string[]) => void;
@@ -57,6 +83,25 @@ export type DetectedSettings = {
   source: "domain" | "mx" | "autoconfig" | "guess";
   help?: string;
 };
+
+type AccountStatus = Pick<Account, "id" | "lastSyncAt" | "syncError" | "syncing">;
+
+/** Lay fresh sync status over the accounts. Unchanged status keeps the same object (no re-render). */
+function withStatus(current: Data, status: AccountStatus[]): Data {
+  let changed = false;
+  const accounts = current.accounts.map((account) => {
+    const s = status.find((x) => x.id === account.id);
+    if (
+      !s ||
+      (s.lastSyncAt === account.lastSyncAt && s.syncError === account.syncError && s.syncing === account.syncing)
+    ) {
+      return account;
+    }
+    changed = true;
+    return { ...account, lastSyncAt: s.lastSyncAt, syncError: s.syncError, syncing: s.syncing };
+  });
+  return changed ? { ...current, accounts } : current;
+}
 
 const StoreContext = createContext<Store | null>(null);
 
@@ -128,6 +173,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // Poll the tiny revision number; fetch the whole mailbox only when it moved.
     const check = async () => {
       if (checking || cancel) return;
+      // A hidden tab or a phone in the pocket does not poll; it catches up when shown.
+      // The Mac app keeps checking so it can notify about new mail.
+      if (document.visibilityState === "hidden" && !window.clarityDesktop) return;
       checking = true;
       try {
         const res = await fetch("/api/revision", { cache: "no-store" });
@@ -136,8 +184,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (!res.ok) return;
-        const { revision } = (await res.json()) as { revision: number };
+        const { revision, accounts } = (await res.json()) as { revision: number; accounts?: AccountStatus[] };
         if (known !== null && revision !== known) load();
+        else if (accounts) setData((current) => (current ? withStatus(current, accounts) : current));
         known = revision;
       } catch {
         // Offline for a moment: the next check catches up.
@@ -149,14 +198,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     void check();
     const fast = window.clarityDesktop ? 3_000 : 10_000;
     const quick = setInterval(() => void check(), fast);
-    // Sync dots and "synced 2 min ago" change without a new revision.
-    const poll = setInterval(load, 60_000);
+    // Sync status comes with each check; a full reload now and then is only the safety net.
+    const poll = setInterval(() => {
+      if (document.visibilityState !== "hidden" || window.clarityDesktop) load();
+    }, 5 * 60_000);
     const clock = setInterval(() => setNow(Date.now()), 60_000);
+    // Back on the app: the revision check reloads the mailbox only if something changed.
     const onVisible = () => {
-      if (document.visibilityState === "visible") {
-        void check();
-        load();
-      }
+      if (document.visibilityState === "visible") void check();
     };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
@@ -171,14 +220,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const run = useCallback(
-    (op: string, payload: Record<string, unknown>, optimistic?: (current: Data) => Data) => {
+    (
+      op: string,
+      payload: Record<string, unknown>,
+      optimistic?: (current: Data) => Data,
+      onDone?: (result: Record<string, unknown>) => void,
+    ) => {
       const id = ++opCount.current;
       if (optimistic) {
         pending.current.set(id, { patch: optimistic, settledAt: null });
         setData((current) => (current ? optimistic(current) : current));
       }
       void post(op, payload)
-        .then(() => {
+        .then((result) => {
+          onDone?.(result);
           const change = pending.current.get(id);
           // Loads started from now on see the change; earlier ones still need the overlay.
           if (change) change.settledAt = loadsStarted.current;
@@ -232,6 +287,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ...d,
           threads: d.threads.map((t) => (t.id === id ? { ...t, spaceOverride: space } : t)),
         })),
+      bulk: (ids, action) => {
+        if (ids.length === 0) return;
+        const set = new Set(ids);
+        run(
+          "thread.bulk",
+          { ids, action },
+          (d) => ({ ...d, threads: d.threads.map((t) => (set.has(t.id) ? applyBulk(t, action) : t)) }),
+          (result) => {
+            const failed = Number(result.failed) || 0;
+            if (failed > 0) {
+              toast.error(`${failed === 1 ? "1 conversation" : `${failed} conversations`} could not be updated.`);
+            }
+          },
+        );
+      },
       reply: async (id, from, body) => {
         await post("thread.reply", { id, from, body });
         await refresh();

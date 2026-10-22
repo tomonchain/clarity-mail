@@ -105,42 +105,51 @@ async function classify(msg: MessageRow, ai: Provider): Promise<{ category: Cate
   }
 }
 
+const AI_PER_SYNC = 10;
+
+/** Classify threads waiting for triage. Returns how many were updated. */
 export async function triageAccount(accountId: string) {
   const db = getDb();
   const pending = db
-    .prepare("SELECT * FROM threads WHERE account_id = ? AND triaged = 0 LIMIT 20")
-    .all(accountId) as ThreadRow[];
-  let budget = 10;
-  for (const thread of pending) {
-    const msg = messagesForThread(thread.id).at(-1);
-    if (!msg) continue;
-    let category = heuristic(msg);
-    let summary: string | null = null;
-    let source: string | null = null;
-    const ai = provider();
-    if (ai && budget > 0) {
-      budget -= 1;
-      try {
-        const result = await classify(msg, ai);
-        if (result) {
-          const own = msg.from_email.toLowerCase() === ownerEmail(msg.account_id).toLowerCase();
-          category = result.category;
-          if (msg.list_unsub) category = "newsletter";
-          else if (
-            msg.auto_submitted ||
-            /no[-_.]?reply|notifications?@|mailer-daemon|noreply/.test(msg.from_email)
-          ) {
-            category = "notification";
-          } else if (own && category === "needs-reply") category = "fyi";
-          summary = result.summary || null;
-          source = "ai";
+    .prepare("SELECT id FROM threads WHERE account_id = ? AND triaged = 0 ORDER BY rowid DESC LIMIT 20")
+    .all(accountId) as Pick<ThreadRow, "id">[];
+  const ai = provider();
+  const owner = ownerEmail(accountId).toLowerCase();
+  // The AI calls run side by side: ten in a row could hold a sync for minutes.
+  const results = await Promise.all(
+    pending.map(async (thread, index) => {
+      const msg = messagesForThread(thread.id).at(-1);
+      if (!msg) return null;
+      let category = heuristic(msg);
+      let summary: string | null = null;
+      let source: string | null = null;
+      if (ai && index < AI_PER_SYNC) {
+        try {
+          const result = await classify(msg, ai);
+          if (result) {
+            const own = msg.from_email.toLowerCase() === owner;
+            category = result.category;
+            if (msg.list_unsub) category = "newsletter";
+            else if (
+              msg.auto_submitted ||
+              /no[-_.]?reply|notifications?@|mailer-daemon|noreply/.test(msg.from_email)
+            ) {
+              category = "notification";
+            } else if (own && category === "needs-reply") category = "fyi";
+            summary = result.summary || null;
+            source = "ai";
+          }
+        } catch (err) {
+          console.error("[triage]", err instanceof Error ? err.message : err);
         }
-      } catch (err) {
-        console.error("[triage]", err instanceof Error ? err.message : err);
       }
-    }
-    db.prepare(
-      "UPDATE threads SET category = ?, summary = ?, summary_source = ?, triaged = 1 WHERE id = ?",
-    ).run(category, summary, source, thread.id);
-  }
+      return { id: thread.id, category, summary, source };
+    }),
+  );
+  const update = db.prepare("UPDATE threads SET category = ?, summary = ?, summary_source = ?, triaged = 1 WHERE id = ?");
+  let updated = 0;
+  db.transaction(() => {
+    for (const r of results) if (r) updated += update.run(r.category, r.summary, r.source, r.id).changes;
+  })();
+  return updated;
 }

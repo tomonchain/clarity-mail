@@ -47,37 +47,99 @@ import { useStore } from "@/lib/store";
 import type { ScoredThread, ThreadStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+function describe(list: ScoredThread[]) {
+  return list.length === 1 ? list[0].subject : `${list.length} conversations`;
+}
+
+// The last change that can be undone, shared by every view so ⌘Z works anywhere.
+let lastUndo: { label: string; run: () => void } | null = null;
+
 export function useThreadCommands() {
   const store = useStore();
   const { compose } = useCompose();
 
-  /** Change a thread's status and offer to undo it. */
-  const file = (t: ScoredThread, status: ThreadStatus, message: string, until?: number) => {
-    const snapshot = store.threads.find((x) => x.id === t.id);
-    store.setStatus(t.id, status, until);
-    toast(message, {
-      description: t.subject,
-      action: snapshot ? { label: "Undo", onClick: () => store.restoreThreads([snapshot]) } : undefined,
-    });
+  /** Keep a copy of the threads as they are now, so the change can be undone. */
+  const remember = (list: ScoredThread[], label: string) => {
+    const ids = new Set(list.map((t) => t.id));
+    const snapshot = store.threads.filter((t) => ids.has(t.id));
+    if (snapshot.length === 0) return undefined;
+    const undo = () => {
+      store.restoreThreads(snapshot);
+      if (lastUndo?.run === undo) lastUndo = null;
+    };
+    lastUndo = { label, run: undo };
+    return { label: "Undo", onClick: undo };
   };
 
-  const archive = (t: ScoredThread) => file(t, "done", "Archived");
-  const trash = (t: ScoredThread) => file(t, "trash", "Moved to Trash");
-  const spam = (t: ScoredThread) => file(t, "spam", "Reported as spam");
-  const toInbox = (t: ScoredThread) =>
-    file(t, "inbox", t.status === "spam" ? "Marked as not spam" : t.status === "trash" ? "Restored to inbox" : "Moved to inbox");
-  const snooze = (t: ScoredThread, label: string, until: number) =>
-    file(t, "snoozed", `Snoozed: ${label.toLowerCase()}`, until);
+  /** Change the status of one or more threads and offer to undo it. */
+  const file = (list: ScoredThread[], status: ThreadStatus, message: string, until?: number) => {
+    if (list.length === 0) return;
+    const action = remember(list, message);
+    store.bulk(
+      list.map((t) => t.id),
+      { kind: "status", status, snoozedUntil: until },
+    );
+    toast(message, { description: describe(list), action });
+  };
+
+  const many = (t: ScoredThread | ScoredThread[]) => (Array.isArray(t) ? t : [t]);
+
+  const archive = (t: ScoredThread | ScoredThread[]) => file(many(t), "done", "Archived");
+  const trash = (t: ScoredThread | ScoredThread[]) => file(many(t), "trash", "Moved to Trash");
+  const spam = (t: ScoredThread | ScoredThread[]) => file(many(t), "spam", "Reported as spam");
+  const toInbox = (t: ScoredThread | ScoredThread[]) => {
+    const list = many(t);
+    const from = list[0]?.status;
+    file(list, "inbox", from === "spam" ? "Marked as not spam" : from === "trash" ? "Restored to inbox" : "Moved to inbox");
+  };
+  const snooze = (t: ScoredThread | ScoredThread[], label: string, until: number) =>
+    file(many(t), "snoozed", `Snoozed: ${label.toLowerCase()}`, until);
   const forward = (t: ScoredThread) => compose(forwardDraft(t));
   const purge = (t: ScoredThread) => {
     store.purgeThreads([t.id]);
     toast("Deleted forever", { description: t.subject });
   };
 
-  const move = (t: ScoredThread, spaceId: ScoredThread["space"]) => {
+  /** Star or unstar: if any of them is unstarred, star them all. */
+  const star = (t: ScoredThread | ScoredThread[]) => {
+    const list = many(t);
+    if (list.length === 0) return;
+    const starred = list.some((x) => !x.starred);
+    remember(list, starred ? "Starred" : "Unstarred");
+    store.bulk(
+      list.map((x) => x.id),
+      { kind: "star", starred },
+    );
+    if (list.length > 1) toast(starred ? "Starred" : "Unstarred", { description: describe(list) });
+  };
+
+  /** Read or unread: if any of them is unread, mark them all read. Pass `unread` to force it. */
+  const markRead = (t: ScoredThread | ScoredThread[], unread?: boolean) => {
+    const list = many(t);
+    if (list.length === 0) return;
+    const next = unread ?? !list.some((x) => x.unread);
+    remember(list, next ? "Marked as unread" : "Marked as read");
+    store.bulk(
+      list.map((x) => x.id),
+      { kind: "read", unread: next },
+    );
+    if (list.length > 1) toast(next ? "Marked as unread" : "Marked as read", { description: describe(list) });
+  };
+
+  const move = (t: ScoredThread | ScoredThread[], spaceId: ScoredThread["space"]) => {
+    const list = many(t).filter((x) => x.space !== spaceId);
+    if (list.length === 0) return;
     const target = store.spaces.find((s) => s.id === spaceId);
-    const domain = t.messages[0].from.email.split("@")[1];
-    store.moveToSpace(t.id, spaceId);
+    store.bulk(
+      list.map((x) => x.id),
+      { kind: "move", space: spaceId },
+    );
+    const domains = new Set(list.map((x) => x.messages[0].from.email.split("@")[1]));
+    if (domains.size !== 1) {
+      toast(`Moved to ${target?.name}`, { description: describe(list) });
+      return;
+    }
+    const [domain] = domains;
     toast(`Moved to ${target?.name}`, {
       description: `Route everything from @${domain} there too?`,
       action: {
@@ -90,7 +152,18 @@ export function useThreadCommands() {
     });
   };
 
-  return { archive, trash, spam, toInbox, snooze, forward, purge, move };
+  /** Undo the last archive, delete, snooze, star or read change. */
+  const undo = () => {
+    if (!lastUndo) {
+      toast("Nothing to undo");
+      return;
+    }
+    const { label, run } = lastUndo;
+    run();
+    toast(`Undone: ${label.toLowerCase()}`);
+  };
+
+  return { archive, trash, spam, toInbox, snooze, forward, purge, move, star, markRead, undo };
 }
 
 /** Wraps a trigger element in a tooltip showing a label and an optional key. */
@@ -192,7 +265,7 @@ export function ThreadActions({
   className?: string;
 }) {
   const store = useStore();
-  const { archive, trash, spam, toInbox, snooze, forward, move } = useThreadCommands();
+  const { archive, trash, spam, toInbox, snooze, forward, move, star, markRead } = useThreadCommands();
   const [purging, setPurging] = useState(false);
   const isInbox = thread.status === "inbox";
   const primary = primaryAction(thread);
@@ -269,14 +342,14 @@ export function ThreadActions({
           <IconAction
             label={thread.starred ? "Unstar" : "Star"}
             hint="S"
-            onClick={() => store.toggleStar(thread.id)}
+            onClick={() => star(thread)}
           >
             <Star className={cn(thread.starred && "fill-warning text-warning")} />
           </IconAction>
           <IconAction
             label={thread.unread ? "Mark as read" : "Mark as unread"}
             hint="U"
-            onClick={() => store.setUnread(thread.id, !thread.unread)}
+            onClick={() => markRead(thread)}
           >
             {thread.unread ? <MailOpen /> : <Mail />}
           </IconAction>
