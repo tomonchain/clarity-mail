@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-beta.3 — 2026-10-26
+
+Faces where they belong, and a signature under your mail.
+
+### Mail
+
+- A person writing from a company keeps their initials, with the company's icon as a small badge, instead of wearing its logo. Newsletters and notifications still show the logo full size.
+- A signature per mailbox, in Settings → Mailboxes → Rename & edit. It goes under new mail, replies and forwards, follows the address you send from, and can be left off a message.
+
+### Personal
+
+- Your photo in Settings → General: on your own messages and the lock screen. A link to Gravatar sets the one other people see.
+
 ## 1.0.0-beta.2 — 2026-10-26
 
 A more personal Clarity: your name, a lock screen with a view, and mail you can find from anywhere.

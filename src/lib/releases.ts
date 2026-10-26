@@ -16,7 +16,7 @@ export type Release = {
 export const RELEASES: Release[] = [
   {
     version: "1.0.0-beta.3",
-    date: null,
+    date: "2026-10-26",
     intro: "Faces where they belong, and a signature under your mail.",
     sections: [
       {
