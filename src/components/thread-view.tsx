@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Archive, Clock, Forward, Reply, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
+import { Archive, ArrowLeft, Clock, Forward, Reply, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -190,7 +190,8 @@ function StatusBadge({ status }: { status: Exclude<ScoredThread["status"], "inbo
   );
 }
 
-export function ThreadView({ thread }: { thread: ScoredThread }) {
+/** `onBack` adds a way back to the list, when the conversation fills the window. */
+export function ThreadView({ thread, onBack }: { thread: ScoredThread; onBack?: () => void }) {
   const { spaces } = useStore();
   const space = spaces.find((s) => s.id === thread.space);
   const reasons = thread.reasons.filter((r) => Math.abs(r.points) >= 10).slice(0, 3);
@@ -204,6 +205,12 @@ export function ThreadView({ thread }: { thread: ScoredThread }) {
   return (
     <article className="flex h-full min-h-0 flex-col bg-surface">
       <div className="desktop-drag flex h-12 shrink-0 items-center gap-2 border-b bg-surface/85 pr-12 pl-5 backdrop-blur-xl lg:pr-4 in-[.desktop-app]:lg:h-14">
+        {onBack && (
+          <Button variant="ghost" size="sm" className="-ml-2.5 text-muted-foreground" onClick={onBack} title="Back to the list (Esc)">
+            <ArrowLeft />
+            Back
+          </Button>
+        )}
         <span className="inline-flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
           <SpaceDot space={space} />
           <span className="font-medium text-foreground/80">{space?.name}</span>

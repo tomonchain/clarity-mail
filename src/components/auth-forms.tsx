@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { FingerprintPattern } from "lucide-react";
 import { LogoMark } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { greeting } from "@/lib/format";
+import { firstName, lockPhoto, usePersonal } from "@/lib/personal";
+import { cn } from "@/lib/utils";
 
 function Card({
   title,
@@ -36,6 +39,93 @@ function Card({
           Clarity Mail · iCloud, Gmail and any IMAP mailbox in one place
         </p>
       </div>
+    </main>
+  );
+}
+
+// The clock on the lock screen: one value per minute, nothing before hydration.
+function subscribeMinute(cb: () => void) {
+  const timer = setInterval(cb, 5_000);
+  return () => clearInterval(timer);
+}
+const minute = () => Math.floor(Date.now() / 60_000) * 60_000;
+
+/** Full-screen photo, clock and greeting around the unlock form, like a phone's lock screen. */
+function LockScreen({ lede, children }: { lede: string; children: React.ReactNode }) {
+  const personal = usePersonal();
+  const now = useSyncExternalStore(subscribeMinute, minute, () => 0);
+  const photo = now ? lockPhoto(personal, now) : null;
+  const name = firstName(personal.name);
+  const time = now ? new Date(now).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
+  const date = now ? new Date(now).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }) : "";
+
+  return (
+    <main
+      className={cn(
+        "relative grid h-dvh place-items-center overflow-y-auto px-4 py-10",
+        photo ? "dark bg-neutral-950 text-white" : "bg-surface",
+      )}
+    >
+      {photo ? (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element -- remote or data: photo, no optimizer wanted */}
+          <img
+            key={photo.url}
+            src={photo.url}
+            alt=""
+            aria-hidden
+            // Fades in once loaded instead of painting line by line.
+            onLoad={(event) => event.currentTarget.setAttribute("data-loaded", "")}
+            className="pointer-events-none absolute inset-0 size-full object-cover opacity-0 transition-opacity duration-700 data-loaded:opacity-100"
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,oklch(0_0_0/45%),oklch(0_0_0/10%)_40%,oklch(0_0_0/55%))]"
+          />
+        </>
+      ) : (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,var(--brand-soft),transparent_70%)]"
+        />
+      )}
+      <div className="desktop-drag absolute inset-x-0 top-0 h-10" />
+      <div className="relative flex w-full max-w-sm animate-fade-up flex-col items-center">
+        <div className={cn("mb-8 flex flex-col items-center text-center", photo && "drop-shadow-[0_2px_12px_oklch(0_0_0/35%)]")}>
+          {!photo && <LogoMark className="mb-5 size-14 rounded-2xl" />}
+          {time && (
+            <>
+              <p className={cn("text-sm font-medium capitalize", photo ? "text-white/85" : "text-muted-foreground")}>
+                {date}
+              </p>
+              <p className="font-display text-7xl leading-none tracking-tight tabular-nums sm:text-8xl">{time}</p>
+            </>
+          )}
+          <h1 className={cn("mt-5 font-display tracking-tight", time ? "text-2xl" : "text-4xl")}>
+            {now ? `${greeting(now)}${name ? `, ${name}` : ""}` : "Welcome back"}
+          </h1>
+          <p className={cn("mt-1.5 text-sm leading-relaxed", photo ? "text-white/80" : "text-muted-foreground")}>{lede}</p>
+        </div>
+        <div
+          className={cn(
+            "w-full rounded-2xl p-6",
+            photo
+              ? "bg-black/30 shadow-2xl ring-1 ring-white/15 backdrop-blur-2xl backdrop-saturate-150"
+              : "bg-card shadow-float",
+          )}
+        >
+          {children}
+        </div>
+      </div>
+      <p
+        className={cn(
+          "absolute inset-x-4 bottom-3 flex justify-between gap-4 text-[11px]",
+          photo ? "text-white/60" : "text-muted-foreground",
+        )}
+      >
+        <span>Clarity Mail</span>
+        {photo?.author && <span className="truncate">Photo: {photo.author} · Unsplash</span>}
+      </p>
     </main>
   );
 }
@@ -181,10 +271,7 @@ export function LoginForm({ error, locked = false }: { error?: string | null; lo
   }, [error, unlock]);
 
   return (
-    <Card
-      title={locked ? "Clarity is locked" : "Welcome back"}
-      lede={locked ? "Your mail stays encrypted until you unlock." : "Every inbox, one brief."}
-    >
+    <LockScreen lede={locked ? "Clarity is locked. Your mail stays encrypted until you unlock." : "Every inbox, one brief."}>
       {touchId && (
         <div className="mb-5 space-y-3">
           <Button
@@ -229,6 +316,6 @@ export function LoginForm({ error, locked = false }: { error?: string | null; lo
           </p>
         )}
       </form>
-    </Card>
+    </LockScreen>
   );
 }

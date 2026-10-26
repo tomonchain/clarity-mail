@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { NextConfig } from "next";
 
 const desktopBuild = process.env.NEXT_DESKTOP_BUILD === "1";
@@ -35,7 +38,19 @@ const SECURITY_HEADERS = [
   },
 ];
 
+// Shown in Settings → Updates. The commit is unknown when building without git (Docker).
+const APP_VERSION = (JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as { version: string }).version;
+function appCommit() {
+  if (process.env.CLARITY_COMMIT) return process.env.CLARITY_COMMIT;
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch {
+    return "";
+  }
+}
+
 const nextConfig: NextConfig = {
+  env: { NEXT_PUBLIC_APP_VERSION: APP_VERSION, NEXT_PUBLIC_APP_COMMIT: appCommit() },
   ...(desktopBuild ? { output: "standalone" as const, distDir: ".next-desktop" } : {}),
   allowedDevOrigins: ["127.0.0.1", "*.agent.cvm.dev"],
   poweredByHeader: false,
