@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -67,6 +68,7 @@ import {
   setCustomPhoto,
   setLockBackground,
   setOwnerName,
+  setOwnerPhoto,
   shrinkPhoto,
   usePersonal,
   type LockBackground,
@@ -315,6 +317,7 @@ function EditAccountForm({ account, onClose }: { account: Account; onClose: () =
   const { updateAccount, updateAccountPassword } = useStore();
   const [label, setLabel] = useState(account.label);
   const [aliases, setAliases] = useState(account.aliases.join(", "));
+  const [signature, setSignature] = useState(account.signature ?? "");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -336,6 +339,7 @@ function EditAccountForm({ account, onClose }: { account: Account; onClose: () =
       const patch: Partial<Account> = {};
       if (name !== account.label) patch.label = name;
       if (list.join(",") !== account.aliases.join(",")) patch.aliases = list;
+      if (signature.trimEnd() !== (account.signature ?? "")) patch.signature = signature.trimEnd();
       if (Object.keys(patch).length > 0) updateAccount(account.id, patch);
       toast.success(password ? `${name} updated, password checked` : `${name} saved`);
       onClose();
@@ -366,6 +370,21 @@ function EditAccountForm({ account, onClose }: { account: Account; onClose: () =
           placeholder="contact@domain.com, hello@domain.com"
         />
         <p className="text-xs text-muted-foreground">Aliases you send from. Separate them with commas.</p>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="edit-signature">Signature</Label>
+        <Textarea
+          id="edit-signature"
+          value={signature}
+          onChange={(e) => setSignature(e.target.value)}
+          placeholder={"Your name\nyour-company.com"}
+          rows={4}
+          maxLength={2000}
+          className="resize-y text-sm"
+        />
+        <p className="text-xs text-muted-foreground">
+          Added under new mail, replies and forwards from this mailbox and its aliases. You can leave it off a message.
+        </p>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="edit-password">New password</Label>
@@ -1010,6 +1029,70 @@ function LockPreview() {
   );
 }
 
+/** Your picture in Clarity, and where to set the one other people see. */
+function OwnPhotoRow() {
+  const personal = usePersonal();
+  const { accounts } = useStore();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const initials = (personal.name || accounts[0]?.label || "?")
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase())
+    .join("");
+
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      if (!setOwnerPhoto(await shrinkPhoto(file, 256, true))) toast.error("This browser could not keep the photo.");
+    } catch {
+      toast.error("Could not read this photo.");
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-start gap-3 px-5 py-4 sm:flex-row sm:items-center">
+      <span className="relative grid size-12 shrink-0 place-items-center overflow-hidden rounded-full bg-secondary text-sm font-semibold text-muted-foreground">
+        {initials}
+        {personal.photo && (
+          // eslint-disable-next-line @next/next/no-img-element -- a data: URL kept on this device
+          <img src={personal.photo} alt="" className="absolute inset-0 size-full object-cover" />
+        )}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">Your photo</p>
+        <p className="text-sm text-muted-foreground">
+          On your messages and the lock screen, on this device. Others see the photo of your{" "}
+          <a href="https://gravatar.com/profile/avatars" target="_blank" rel="noreferrer" className="text-brand hover:underline">
+            Gravatar
+          </a>{" "}
+          or of your Google account, set there.
+        </p>
+      </div>
+      <div className="flex shrink-0 gap-2">
+        <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+          <ImagePlus />
+          {personal.photo ? "Change…" : "Choose…"}
+        </Button>
+        {personal.photo && (
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setOwnerPhoto(null)}>
+            Remove
+          </Button>
+        )}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void pick(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+
 function PersonalPanel() {
   const personal = usePersonal();
   // Typed text, so a trailing space survives until the next word.
@@ -1041,6 +1124,7 @@ function PersonalPanel() {
           className="h-8 w-full sm:w-48"
         />
       </SettingRow>
+      <OwnPhotoRow />
       <div className="space-y-4 px-5 py-4">
         <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>

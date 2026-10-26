@@ -13,11 +13,11 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { MailBody } from "@/components/mail-body";
-import { useCompose } from "@/components/compose";
-import { SenderAvatar } from "@/components/sender-avatar";
+import { SignatureNote, useCompose } from "@/components/compose";
+import { automatedThread, SenderAvatar } from "@/components/sender-avatar";
 import { SpaceDot } from "@/components/space-badge";
 import { ThreadActions } from "@/components/thread-actions";
-import { defaultIdentity, forwardDraft } from "@/lib/drafts";
+import { defaultIdentity, forwardDraft, signatureFor, withSignature } from "@/lib/drafts";
 import { fullDate } from "@/lib/format";
 import { PRIORITY_THRESHOLD } from "@/lib/priority";
 import { useStore } from "@/lib/store";
@@ -33,17 +33,19 @@ function otherParty(thread: ScoredThread) {
 }
 
 function Composer({ thread }: { thread: ScoredThread }) {
-  const { reply } = useStore();
+  const { reply, accounts } = useStore();
   const { compose } = useCompose();
   const identities = [thread.account.email, ...thread.account.aliases];
   const [from, setFrom] = useState(() => defaultIdentity(thread));
   const [body, setBody] = useState("");
+  const [signed, setSigned] = useState(true);
+  const signature = signatureFor(accounts, from);
   const recipient = otherParty(thread);
 
   const send = async () => {
     if (!body.trim()) return;
     try {
-      await reply(thread.id, from, body.trim());
+      await reply(thread.id, from, signed ? withSignature(body.trim(), signature) : body.trim());
       setBody("");
       toast.success(`Reply sent from ${from}`);
     } catch (err) {
@@ -89,6 +91,14 @@ function Composer({ thread }: { thread: ScoredThread }) {
         placeholder={`Write to ${recipient.name.split(" ")[0]}…`}
         className="min-h-28 resize-y rounded-none border-0 bg-transparent px-4 py-3 text-[15px] leading-relaxed shadow-none focus-visible:ring-0 dark:bg-transparent"
       />
+      {body.trim() && (
+        <SignatureNote
+          signature={signature}
+          included={signed}
+          onToggle={() => setSigned((v) => !v)}
+          className="px-4 pb-3"
+        />
+      )}
       <div className="flex items-center gap-2 px-3 pb-3">
         <span className="hidden pl-1 text-xs text-muted-foreground sm:inline">
           <kbd className="font-mono">⌘ ↵</kbd> to send
@@ -108,10 +118,12 @@ function Composer({ thread }: { thread: ScoredThread }) {
 
 function MessageCard({
   message,
+  automated,
   collapsed,
   onToggle,
 }: {
   message: Message;
+  automated: boolean;
   collapsed: boolean;
   onToggle: () => void;
 }) {
@@ -122,7 +134,7 @@ function MessageCard({
         onClick={onToggle}
         className="flex w-full items-center gap-3 rounded-xl bg-card px-4 py-3 text-left shadow-card transition-colors hover:bg-accent/50"
       >
-        <SenderAvatar name={message.from.name} email={message.from.email} size="sm" />
+        <SenderAvatar name={message.from.name} email={message.from.email} automated={automated} size="sm" />
         <span className="shrink-0 text-sm font-medium">{message.from.name}</span>
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{message.body.slice(0, 160)}</span>
         <time className="shrink-0 text-xs text-muted-foreground">{fullDate(message.sentAt)}</time>
@@ -132,7 +144,7 @@ function MessageCard({
   return (
     <section className="animate-fade-up rounded-xl bg-card shadow-card">
       <header className="flex items-start gap-3 px-5 pt-4 pb-3">
-        <SenderAvatar name={message.from.name} email={message.from.email} size="lg" />
+        <SenderAvatar name={message.from.name} email={message.from.email} automated={automated} size="lg" />
         <div className="min-w-0 flex-1">
           <p className="flex items-baseline gap-2">
             <span className="truncate text-sm font-semibold">{message.from.name}</span>
@@ -166,7 +178,13 @@ function Conversation({ thread }: { thread: ScoredThread }) {
   return (
     <div className="space-y-3">
       {thread.messages.map((m) => (
-        <MessageCard key={m.id} message={m} collapsed={!open.has(m.id)} onToggle={() => toggle(m.id)} />
+        <MessageCard
+          key={m.id}
+          message={m}
+          automated={automatedThread(thread)}
+          collapsed={!open.has(m.id)}
+          onToggle={() => toggle(m.id)}
+        />
       ))}
     </div>
   );

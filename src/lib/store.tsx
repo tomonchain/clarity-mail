@@ -338,6 +338,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (patch.label !== undefined) payload.label = patch.label;
         if (patch.defaultSpace) payload.defaultSpace = patch.defaultSpace;
         if (patch.aliases) payload.aliases = patch.aliases;
+        if (patch.signature !== undefined) payload.signature = patch.signature;
         if (Object.keys(payload).length === 1) return;
         run("account.update", payload, (d) => ({
           ...d,

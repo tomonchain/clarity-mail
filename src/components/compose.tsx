@@ -14,7 +14,36 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { signatureFor, withSignature } from "@/lib/drafts";
 import { useStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
+
+/** The signature that will go under the message, and a way to leave it off this once. */
+export function SignatureNote({
+  signature,
+  included,
+  onToggle,
+  className,
+}: {
+  signature: string;
+  included: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  if (!signature) return null;
+  return (
+    <div className={cn("group/sig flex items-start gap-3 text-[13px] leading-relaxed", className)}>
+      <p className={cn("min-w-0 flex-1 whitespace-pre-line text-muted-foreground", !included && "line-through opacity-50")}>
+        <span className="font-mono text-xs">-- </span>
+        {"\n"}
+        {signature}
+      </p>
+      <button type="button" onClick={onToggle} className="shrink-0 text-xs text-muted-foreground hover:text-foreground">
+        {included ? "Leave off" : "Add signature"}
+      </button>
+    </div>
+  );
+}
 
 export type Draft = { from?: string; to?: string; cc?: string; subject?: string; body?: string };
 
@@ -38,13 +67,15 @@ function ComposeForm({ draft, onDone }: { draft: Draft; onDone: () => void }) {
   const [subject, setSubject] = useState(draft.subject ?? "");
   const [body, setBody] = useState(draft.body ?? "");
   const [sending, setSending] = useState(false);
+  const [signed, setSigned] = useState(true);
+  const signature = signatureFor(accounts, from);
   const ready = from && to.trim() && body.trim() && !sending;
 
   const send = async () => {
     if (!ready) return;
     setSending(true);
     try {
-      await sendMail({ from, to, cc: showCc ? cc : undefined, subject, body });
+      await sendMail({ from, to, cc: showCc ? cc : undefined, subject, body: signed ? withSignature(body, signature) : body });
       toast.success(`Sent from ${from}`);
       onDone();
     } catch (err) {
@@ -133,6 +164,12 @@ function ComposeForm({ draft, onDone }: { draft: Draft; onDone: () => void }) {
           aria-label="Message"
           placeholder="Write your message…"
           className="min-h-64 resize-y rounded-none border-0 border-t bg-transparent px-3.5 py-3 text-[15px] leading-relaxed shadow-none focus-visible:ring-0 dark:bg-transparent"
+        />
+        <SignatureNote
+          signature={signature}
+          included={signed}
+          onToggle={() => setSigned((v) => !v)}
+          className="border-t px-3.5 py-2.5"
         />
       </div>
       <div className="flex items-center justify-end gap-3">

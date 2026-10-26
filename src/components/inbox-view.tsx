@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { InboxShortcuts, type Picker } from "@/components/inbox-shortcuts";
 import { SearchButton } from "@/components/search-dialog";
-import { SenderAvatar } from "@/components/sender-avatar";
+import { automatedThread, SenderAvatar } from "@/components/sender-avatar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -220,7 +220,7 @@ function ThreadRow({
           <span className="absolute top-[1.4rem] left-1.5 size-2 rounded-full bg-brand" aria-label="Unread" />
         )}
         <span className={cn("transition-opacity", (checked || selecting) && "opacity-0", "max-lg:opacity-100 lg:group-hover/row:opacity-0")}>
-          <SenderAvatar name={face.name} email={face.email} />
+          <SenderAvatar name={face.name} email={face.email} automated={automatedThread(thread)} />
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex items-center gap-2">
