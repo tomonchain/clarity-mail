@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Search, SearchX, Sparkles } from "lucide-react";
-import { SenderAvatar } from "@/components/sender-avatar";
+import { automatedThread, SenderAvatar } from "@/components/sender-avatar";
 import { SpaceDot } from "@/components/space-badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -51,7 +51,7 @@ function ResultRow({ thread, active, onOpen, onHover }: { thread: ScoredThread; 
         onMouseMove={onHover}
         className={cn("flex w-full gap-3 rounded-xl px-3 py-2.5 text-left", active && "bg-accent")}
       >
-        <SenderAvatar name={last.from.name} email={last.from.email} />
+        <SenderAvatar name={last.from.name} email={last.from.email} automated={automatedThread(thread)} />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
             <span className={cn("min-w-0 flex-1 truncate text-sm", thread.unread ? "font-semibold" : "font-medium")}>

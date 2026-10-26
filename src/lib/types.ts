@@ -23,6 +23,8 @@ export type Account = {
   smtpPort?: number;
   defaultSpace: SpaceId;
   aliases: string[];
+  /** Added under new mail, replies and forwards from this mailbox. Plain text. */
+  signature?: string;
   lastSyncAt?: number | null;
   syncError?: string | null;
   syncing?: boolean;

@@ -182,6 +182,7 @@ export async function mutate(body: unknown): Promise<unknown> {
             defaultSpace: z.string().min(1).optional(),
             aliases: z.array(z.string().trim().email("Aliases must be email addresses.")).max(20).optional(),
             password: z.string().min(1).optional(),
+            signature: z.string().max(2000, "Keep the signature under 2,000 characters.").optional(),
           }),
           body,
         );
@@ -204,8 +205,15 @@ export async function mutate(body: unknown): Promise<unknown> {
           ? JSON.stringify([...new Set(input.aliases.map((a) => a.toLowerCase()))])
           : row.aliases;
         db.prepare(
-          "UPDATE accounts SET label = ?, default_space = ?, aliases = ?, secret = ? WHERE id = ?",
-        ).run(input.label ?? row.label, input.defaultSpace ?? row.default_space, aliases, secret, input.id);
+          "UPDATE accounts SET label = ?, default_space = ?, aliases = ?, secret = ?, signature = ? WHERE id = ?",
+        ).run(
+          input.label ?? row.label,
+          input.defaultSpace ?? row.default_space,
+          aliases,
+          secret,
+          input.signature?.replace(/\r\n/g, "\n").trimEnd() ?? row.signature,
+          input.id,
+        );
         // "Waiting on others" depends on which addresses are yours.
         if (aliases !== row.aliases) recomputeAccount(input.id);
         if (input.password && row.sync_error) syncSoon(input.id);

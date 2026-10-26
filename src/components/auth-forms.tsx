@@ -92,7 +92,16 @@ function LockScreen({ lede, children }: { lede: string; children: React.ReactNod
       <div className="desktop-drag absolute inset-x-0 top-0 h-10" />
       <div className="relative flex w-full max-w-sm animate-fade-up flex-col items-center">
         <div className={cn("mb-8 flex flex-col items-center text-center", photo && "drop-shadow-[0_2px_12px_oklch(0_0_0/35%)]")}>
-          {!photo && <LogoMark className="mb-5 size-14 rounded-2xl" />}
+          {personal.photo ? (
+            // eslint-disable-next-line @next/next/no-img-element -- a data: URL kept on this device
+            <img
+              src={personal.photo}
+              alt=""
+              className={cn("mb-5 size-16 rounded-full object-cover shadow-lg", photo ? "ring-2 ring-white/50" : "ring-1 ring-hairline")}
+            />
+          ) : (
+            !photo && <LogoMark className="mb-5 size-14 rounded-2xl" />
+          )}
           {time && (
             <>
               <p className={cn("text-sm font-medium capitalize", photo ? "text-white/85" : "text-muted-foreground")}>

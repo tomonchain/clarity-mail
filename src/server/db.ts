@@ -39,6 +39,7 @@ export type AccountRow = {
   smtp_secure: number;
   default_space: string;
   aliases: string;
+  signature: string;
   last_sync_at: number | null;
   sync_error: string | null;
   syncing: number;
@@ -130,6 +131,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   smtp_secure INTEGER NOT NULL,
   default_space TEXT NOT NULL,
   aliases TEXT NOT NULL DEFAULT '[]',
+  signature TEXT NOT NULL DEFAULT '',
   last_sync_at INTEGER,
   sync_error TEXT,
   syncing INTEGER NOT NULL DEFAULT 0,
@@ -453,6 +455,10 @@ export function getDb() {
       db.exec("ALTER TABLE messages ADD COLUMN html_rev INTEGER NOT NULL DEFAULT 0");
       // Only mail with pictures lost its embedded images: the rest needs no new download.
       db.prepare(`UPDATE messages SET html_rev = ? WHERE html IS NOT NULL AND html NOT LIKE '%<img%'`).run(HTML_REV);
+    }
+    const accountColumns = db.prepare("PRAGMA table_info(accounts)").all() as { name: string }[];
+    if (!accountColumns.some((column) => column.name === "signature")) {
+      db.exec("ALTER TABLE accounts ADD COLUMN signature TEXT NOT NULL DEFAULT ''");
     }
     seedDefaults(db);
     migrateAccountSecrets(db);

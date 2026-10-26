@@ -8,16 +8,24 @@ import { useSyncExternalStore } from "react";
  * ask the server, and the server never hands the owner's name to a stranger.
  */
 export type LockBackground = "photos" | "custom" | "plain";
-export type Personal = { name: string; background: LockBackground; shift: number; custom: string | null };
+export type Personal = {
+  name: string;
+  background: LockBackground;
+  shift: number;
+  custom: string | null;
+  /** Your own picture, shown on your messages and the lock screen. */
+  photo: string | null;
+};
 
 const NAME_KEY = "clarity:owner-name";
 const BACKGROUND_KEY = "clarity:lock-background";
 const SHIFT_KEY = "clarity:lock-photo-shift";
 // Separate key: a photo is a few hundred kilobytes and only the lock screen needs it.
 const CUSTOM_KEY = "clarity:lock-photo";
-const KEYS = [NAME_KEY, BACKGROUND_KEY, SHIFT_KEY, CUSTOM_KEY];
+const PHOTO_KEY = "clarity:owner-photo";
+const KEYS = [NAME_KEY, BACKGROUND_KEY, SHIFT_KEY, CUSTOM_KEY, PHOTO_KEY];
 
-const DEFAULT: Personal = { name: "", background: "photos", shift: 0, custom: null };
+const DEFAULT: Personal = { name: "", background: "photos", shift: 0, custom: null, photo: null };
 const listeners = new Set<() => void>();
 // What could not be saved (private mode, full storage) lasts until reload.
 const unsaved = new Map<string, string | null>();
@@ -39,12 +47,13 @@ function read(): Personal {
   const stamp = JSON.stringify(raw);
   if (stamp === cachedStamp) return cached;
   cachedStamp = stamp;
-  const [name, background, shift, custom] = raw;
+  const [name, background, shift, custom, photo] = raw;
   cached = {
     name: name?.trim() ?? "",
     background: background === "custom" || background === "plain" ? background : "photos",
     shift: Number(shift) || 0,
     custom: custom?.startsWith("data:image/") ? custom : null,
+    photo: photo?.startsWith("data:image/") ? photo : null,
   };
   return cached;
 }
@@ -95,6 +104,10 @@ export function setLockBackground(background: LockBackground) {
 
 export function nextLockPhoto() {
   put(SHIFT_KEY, String(read().shift + 1));
+}
+
+export function setOwnerPhoto(dataUrl: string | null): boolean {
+  return put(PHOTO_KEY, dataUrl);
 }
 
 export function setCustomPhoto(dataUrl: string | null): boolean {
@@ -167,14 +180,21 @@ export function lockPhoto(personal: Personal, now: number, size: "full" | "thumb
   return { url: `https://picsum.photos/id/${photo.id}/${w}/${h}.webp`, author: photo.author };
 }
 
-/** Scales a picked file down so it fits in the browser's storage (~5 MB per site). */
-export async function shrinkPhoto(file: File): Promise<string> {
+/**
+ * Scales a picked file down so it fits in the browser's storage (~5 MB per site).
+ * `square` crops the centre, for a profile picture.
+ */
+export async function shrinkPhoto(file: File, maxSide = 2400, square = false): Promise<string> {
   const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
+  const side = Math.min(bitmap.width, bitmap.height);
+  const [sx, sy, sw, sh] = square
+    ? [(bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side]
+    : [0, 0, bitmap.width, bitmap.height];
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
-  canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  canvas.getContext("2d")?.drawImage(bitmap, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   bitmap.close();
   for (const quality of [0.85, 0.7, 0.55]) {
     const url = canvas.toDataURL("image/jpeg", quality);

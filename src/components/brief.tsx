@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { SpaceIcon } from "@/components/app-shell";
 import { SearchButton, useOpenSearch, useOpenThread } from "@/components/search-dialog";
-import { SenderAvatar } from "@/components/sender-avatar";
+import { automatedThread, SenderAvatar } from "@/components/sender-avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SpaceDot } from "@/components/space-badge";
@@ -136,7 +136,7 @@ function PriorityRow({ thread, rank }: { thread: ScoredThread; rank: number }) {
       <span className="hidden w-5 shrink-0 pt-2 text-center text-xs font-medium tabular-nums text-muted-foreground/70 sm:block">
         {rank}
       </span>
-      <SenderAvatar name={last.from.name} email={last.from.email} className="mt-0.5" />
+      <SenderAvatar name={last.from.name} email={last.from.email} automated={automatedThread(thread)} className="mt-0.5" />
       <div className="min-w-0 flex-1">
         <button type="button" onClick={() => open(thread)} className="block w-full text-left">
           <p className="flex items-baseline gap-2">

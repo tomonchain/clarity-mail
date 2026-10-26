@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { readSession } from "@/server/http";
 import { prepareDb } from "@/server/snapshot";
 
-// Photos for a sender: their Gravatar, else the icon of the company they write from.
+// Pictures for a sender, in two kinds: ?kind=photo is their Gravatar, ?kind=logo the icon
+// of the company they write from. The list shows a person's photo, else their initials with
+// the company icon as a small badge, and a company's icon full size for automated mail.
 // Looked up by the server, so the sender's site never sees the reader's address or IP,
 // and only from fixed hosts: an address can't steer the server to another machine.
 
@@ -44,10 +46,13 @@ function baseDomain(domain: string) {
   return labels.slice(-keep).join(".");
 }
 
-async function lookup(email: string): Promise<Picture> {
-  const hash = createHash("sha256").update(email).digest("hex");
-  const gravatar = await fetchImage(`https://gravatar.com/avatar/${hash}?s=160&d=404`);
-  if (gravatar) return gravatar;
+type Kind = "photo" | "logo";
+
+async function lookup(email: string, kind: Kind): Promise<Picture> {
+  if (kind === "photo") {
+    const hash = createHash("sha256").update(email).digest("hex");
+    return fetchImage(`https://gravatar.com/avatar/${hash}?s=160&d=404`);
+  }
   const domain = email.split("@")[1];
   if (PERSONAL_DOMAINS.has(domain) || PERSONAL_DOMAINS.has(baseDomain(domain))) return null;
   for (const host of new Set([domain, baseDomain(domain)])) {
@@ -59,12 +64,12 @@ async function lookup(email: string): Promise<Picture> {
   return null;
 }
 
-function remember(email: string, picture: Picture) {
+function remember(key: string, picture: Picture) {
   if (cache.size >= CACHE_SIZE) cache.delete(cache.keys().next().value!);
-  cache.set(email, { picture, at: Date.now() });
+  cache.set(key, { picture, at: Date.now() });
 }
 
-export async function GET(_request: Request, context: { params: Promise<{ email: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ email: string }> }) {
   try {
     await prepareDb();
   } catch {
@@ -76,16 +81,18 @@ export async function GET(_request: Request, context: { params: Promise<{ email:
     return new Response(null, { status: 404 });
   }
 
-  const known = cache.get(email);
+  const kind: Kind = new URL(request.url).searchParams.get("kind") === "logo" ? "logo" : "photo";
+  const key = `${kind}:${email}`;
+  const known = cache.get(key);
   let picture = known && (known.picture || Date.now() - known.at < MISS_TTL) ? known.picture : undefined;
   if (picture === undefined) {
-    let job = pending.get(email);
+    let job = pending.get(key);
     if (!job) {
-      job = lookup(email).finally(() => pending.delete(email));
-      pending.set(email, job);
+      job = lookup(email, kind).finally(() => pending.delete(key));
+      pending.set(key, job);
     }
     picture = await job;
-    remember(email, picture);
+    remember(key, picture);
   }
 
   if (!picture) {

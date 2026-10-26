@@ -53,6 +53,7 @@ export function readState(): {
       smtpPort: row.smtp_port,
       defaultSpace: row.default_space,
       aliases: parseJson<string[]>(row.aliases, []),
+      signature: row.signature ?? "",
       lastSyncAt: row.last_sync_at,
       syncError: row.sync_error,
       syncing: row.syncing === 1,

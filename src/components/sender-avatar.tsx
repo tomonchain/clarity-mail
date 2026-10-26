@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useDisplayPrefs } from "@/lib/display";
 import { initials } from "@/lib/format";
+import { usePersonal } from "@/lib/personal";
+import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 function hue(seed: string) {
@@ -11,52 +13,70 @@ function hue(seed: string) {
   return h % 360;
 }
 
-// What each address turned out to have, so a row that remounts shows it at once.
-const looks = new Map<string, "photo" | "logo" | "none">();
+// Addresses that are a service rather than a person.
+const AUTOMATED = /^(no-?reply|do-?not-?reply|ne-?pas-?repondre|notifications?|alerts?|mailer-daemon|newsletters?|news|info|hello|bonjour|contact|support|team|billing|receipts?|invoices?|updates?|marketing)([+._-]|@)/i;
 
-/** The sender's picture over the initials, once it has loaded; nothing when there is none. */
-function SenderPhoto({ email }: { email: string }) {
-  const [look, setLook] = useState(() => looks.get(email));
-  if (look === "none") return null;
-  const settle = (next: "photo" | "logo" | "none") => {
-    looks.set(email, next);
-    setLook(next);
+/** Newsletters and notifications: their sender is a service, shown with its icon. */
+export function automatedThread(thread: { category: string }) {
+  return thread.category === "newsletter" || thread.category === "notification";
+}
+
+type Kind = "photo" | "logo";
+// What each address turned out to have, so a row that remounts shows it at once.
+const found = new Map<string, boolean>();
+
+/** A picture from the avatar route over the initials once it has loaded; nothing when there is none. */
+function Picture({ email, kind, className }: { email: string; kind: Kind; className: string }) {
+  const key = `${kind}:${email}`;
+  const [state, setState] = useState(() => found.get(key));
+  if (state === false) return null;
+  const settle = (ok: boolean) => {
+    found.set(key, ok);
+    setState(ok);
   };
   return (
     // eslint-disable-next-line @next/next/no-img-element -- served by our own avatar route
     <img
-      src={`/api/avatar/${encodeURIComponent(email)}`}
+      src={`/api/avatar/${encodeURIComponent(email)}?kind=${kind}`}
       alt=""
       loading="lazy"
       decoding="async"
-      // A company icon is small and drawn on white: it sits inside the circle instead of filling it.
-      onLoad={(event) => settle(event.currentTarget.naturalWidth >= 96 ? "photo" : "logo")}
-      onError={() => settle("none")}
-      className={cn(
-        "absolute inset-0 size-full rounded-full bg-white transition-opacity",
-        look === undefined && "opacity-0",
-        look === "logo" ? "object-contain p-[18%] ring-1 ring-black/5 ring-inset" : "object-cover",
-      )}
+      onLoad={() => settle(true)}
+      onError={() => settle(false)}
+      className={cn("transition-opacity", state === undefined && "opacity-0", className)}
     />
   );
 }
 
-/** Initials on a soft tint derived from the address, so a sender is recognisable at a glance. */
+/**
+ * The sender's face when there is one (your own photo for your addresses, else their Gravatar),
+ * else their initials on a tint derived from the address. A person writing from a company gets
+ * its icon as a small badge; automated mail (newsletters, notifications) gets it full size.
+ */
 export function SenderAvatar({
   name,
   email,
   size = "md",
+  automated = false,
   className,
 }: {
   name: string;
   email: string;
   size?: "sm" | "md" | "lg";
+  /** The thread is a newsletter or a notification. */
+  automated?: boolean;
   className?: string;
 }) {
   const h = hue((email || name).toLowerCase());
   const label = initials(name || email) || (email[0] ?? "?").toUpperCase();
   const { senderPhotos } = useDisplayPrefs();
+  const { photo: ownPhoto } = usePersonal();
+  const { accounts } = useStore();
   const address = email.trim().toLowerCase();
+  const mine = accounts.some((a) => a.email.toLowerCase() === address || a.aliases.includes(address));
+  const service = automated || AUTOMATED.test(address);
+  const lookup = senderPhotos && address.includes("@") && !mine;
+
   return (
     <span
       aria-hidden
@@ -71,7 +91,34 @@ export function SenderAvatar({
       style={{ "--h": h } as React.CSSProperties}
     >
       {label}
-      {senderPhotos && address.includes("@") && <SenderPhoto key={address} email={address} />}
+      {mine && ownPhoto && (
+        // eslint-disable-next-line @next/next/no-img-element -- a data: URL kept on this device
+        <img src={ownPhoto} alt="" className="absolute inset-0 size-full rounded-full object-cover" />
+      )}
+      {lookup && service && (
+        <Picture
+          key={`logo:${address}`}
+          email={address}
+          kind="logo"
+          className="absolute inset-0 size-full rounded-full bg-white object-contain p-[18%] ring-1 ring-black/5 ring-inset"
+        />
+      )}
+      {lookup && !service && size !== "sm" && (
+        <Picture
+          key={`logo:${address}`}
+          email={address}
+          kind="logo"
+          className="absolute -right-1 -bottom-1 size-[45%] rounded-full bg-white object-contain p-[10%] ring-2 ring-background"
+        />
+      )}
+      {lookup && (
+        <Picture
+          key={`photo:${address}`}
+          email={address}
+          kind="photo"
+          className="absolute inset-0 size-full rounded-full bg-white object-cover"
+        />
+      )}
     </span>
   );
 }
