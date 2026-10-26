@@ -86,6 +86,18 @@ DEEPSEEK_API_KEY=your-key
 
 Reopen the app after saving the file. `MISTRAL_API_KEY` is the fallback. Without either, triage stays on header and phrase rules.
 
+### Releases
+
+Settings → Updates shows the version, the release notes, and whether a newer release is out on GitHub (`tomonchain/clarity-mail`, or `CLARITY_RELEASES_REPO`). The app links to the zip; it doesn't install it by itself.
+
+To ship a version:
+
+1. While working, add its notes at the top of `src/lib/releases.ts` with `date: null`. They stay hidden in the app until the version ships.
+2. Merge to `main`, then run `npm run release -- 1.0.0-beta.3 --publish`. It checks the tree, dates the notes, sets the version everywhere, writes `CHANGELOG.md`, commits, tags, builds both Mac apps, pushes, and creates a **draft** GitHub release with the zips.
+3. Read the draft on GitHub and press Publish. Installed apps see it within six hours, or at once with Check now.
+
+Without `--publish` the script stops after the build and prints the remaining commands.
+
 ## iPhone and Android app
 
 `mobile/` is a [Capacitor](https://capacitorjs.com) app: a native shell that opens your Clarity server. A phone cannot run the server itself, so unlike the Mac app it keeps no mail of its own. It is the same interface as the website, with an app icon, a splash screen, a status bar that follows the theme, and Android's back button closing the open conversation first.

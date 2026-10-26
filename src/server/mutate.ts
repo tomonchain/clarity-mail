@@ -16,6 +16,7 @@ import { encryptSecret } from "./crypto";
 import { mailAccount, testLogin } from "./connection";
 import { bumpRevision, dropOrphanImages, getDb, type AccountRow } from "./db";
 import { detectSettings } from "./detect";
+import { isNetworkError } from "./network";
 import { syncAccount } from "./sync";
 import { recomputeAccount } from "./threads";
 
@@ -56,6 +57,10 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 
 function failAction(err: unknown): never {
   if (isActionError(err)) throw new ApiError(err.message, 502);
+  // Offline, or the mail server is down: say so instead of "Something went wrong".
+  if (isNetworkError(err)) {
+    throw new ApiError("Can't reach the mail server. Check your connection and try again.", 502);
+  }
   throw err;
 }
 

@@ -1,4 +1,5 @@
 import { wakeSnoozes } from "../server/actions";
+import { isNetworkError } from "../server/network";
 import { holdDb, persistDb } from "../server/snapshot";
 import { accountIds, syncAccount } from "../server/sync";
 import { reconcilePush } from "./push";
@@ -52,20 +53,6 @@ export function startBackgroundSync() {
   setInterval(() => void tick(), INTERVAL_MS);
 }
 
-// A dropped connection is the mail server's problem, not a reason for the worker to exit.
-const NETWORK_CODES = new Set([
-  "ETIMEOUT",
-  "ETIMEDOUT",
-  "ECONNRESET",
-  "EPIPE",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "NoConnection",
-]);
-
 function guardProcess() {
   process.on("unhandledRejection", (reason) => {
     console.error("[worker] unhandled rejection", reason instanceof Error ? reason.message : reason);
@@ -73,7 +60,8 @@ function guardProcess() {
   process.on("uncaughtException", (err) => {
     const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
     console.error("[worker] uncaught", code, err instanceof Error ? err.message : err);
-    if (!NETWORK_CODES.has(code)) process.exit(1);
+    // A dropped connection is the mail server's problem, not a reason for the worker to exit.
+    if (!isNetworkError(err)) process.exit(1);
   });
 }
 

@@ -20,6 +20,7 @@
     "bootstrap": "tsx scripts/dev-bootstrap.ts",
     "desktop:build": "node desktop/build.mjs",
     "desktop:install": "node desktop/build.mjs --install",
+    "release": "tsx scripts/release.ts",
     "mobile:ios": "npm --prefix mobile run ios",
     "mobile:android": "npm --prefix mobile run android"
   },

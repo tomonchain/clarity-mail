@@ -26,6 +26,8 @@ import { DesktopBridge } from "@/components/desktop-bridge";
 import { NativeBridge } from "@/components/native-bridge";
 import { toast } from "sonner";
 import { FOLDERS, folderOf } from "@/lib/folders";
+import { UpdatedNotice, UpdatePill } from "@/components/release-notes";
+import { SearchButton, SearchProvider } from "@/components/search-dialog";
 import { Button } from "@/components/ui/button";
 import { ComposeButton, ComposeProvider } from "@/components/compose";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -325,17 +327,20 @@ function NavLinks({
         </div>
       )}
 
-      <div className="mt-auto flex items-center gap-1 border-t border-sidebar-border pt-3">
-        <div className="flex-1">
-          <NavItem
-            href="/settings"
-            active={pathname === "/settings"}
-            icon={<Settings strokeWidth={1.9} />}
-            label="Settings"
-            onNavigate={onNavigate}
-          />
+      <div className="mt-auto space-y-2">
+        <UpdatePill onNavigate={onNavigate} />
+        <div className="flex items-center gap-1 border-t border-sidebar-border pt-3">
+          <div className="flex-1">
+            <NavItem
+              href="/settings"
+              active={pathname === "/settings"}
+              icon={<Settings strokeWidth={1.9} />}
+              label="Settings"
+              onNavigate={onNavigate}
+            />
+          </div>
+          <ThemeToggle />
         </div>
-        <ThemeToggle />
       </div>
     </nav>
   );
@@ -354,10 +359,13 @@ function MailboxNotice() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const settings = usePathname()?.startsWith("/settings");
 
   return (
     <ComposeProvider>
+      <SearchProvider>
       <DesktopBridge />
+      <UpdatedNotice />
       <NativeBridge />
       <div className="flex h-dvh w-full overflow-hidden bg-background">
         <aside
@@ -383,6 +391,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Link href="/" aria-label="Clarity Mail, home">
               <Wordmark />
             </Link>
+            {!settings && <SearchButton className="ml-auto" />}
           </header>
           <main
             className={cn(
@@ -404,6 +413,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </SheetContent>
         </Sheet>
       </div>
+      </SearchProvider>
     </ComposeProvider>
   );
 }

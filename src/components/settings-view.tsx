@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
 import {
+  ArrowUpCircle,
+  CheckCircle2,
   ChevronDown,
+  Download,
+  ImagePlus,
   Inbox,
   Laptop,
   Lock,
@@ -12,6 +16,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Shuffle,
   Server,
   ShieldAlert,
   ShieldCheck,
@@ -21,6 +26,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { AddAccountDialog } from "@/components/add-account-form";
+import { ReleaseHistory, SETTINGS_SECTION_EVENT } from "@/components/release-notes";
 import type { LockPrefs } from "@/components/desktop-bridge";
 import { SenderAvatar } from "@/components/sender-avatar";
 import { SpaceDot } from "@/components/space-badge";
@@ -50,7 +56,21 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { relativeTime } from "@/lib/format";
+import { setDisplayPref, useDisplayPrefs, type DisplayPrefs } from "@/lib/display";
+import { greeting, relativeTime } from "@/lib/format";
+import { APP_COMMIT, APP_VERSION } from "@/lib/releases";
+import { checkForUpdates, useUpdates } from "@/lib/updates";
+import {
+  firstName,
+  lockPhoto,
+  nextLockPhoto,
+  setCustomPhoto,
+  setLockBackground,
+  setOwnerName,
+  shrinkPhoto,
+  usePersonal,
+  type LockBackground,
+} from "@/lib/personal";
 import { forgetTrustedSenders, setImageMode, useImagePrefs } from "@/lib/privacy";
 import { countRuleMatches, RULE_FIELD_LABELS } from "@/lib/routing";
 import { SPACE_COLORS } from "@/lib/seed";
@@ -918,6 +938,207 @@ function SettingRow({ title, text, children }: { title: string; text: string; ch
   );
 }
 
+const BACKGROUNDS: { id: LockBackground; label: string }[] = [
+  { id: "photos", label: "Photos" },
+  { id: "custom", label: "Your photo" },
+  { id: "plain", label: "Plain" },
+];
+
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: readonly { id: T; label: string; icon?: typeof Sun }[];
+  onChange: (id: T) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg bg-secondary p-0.5" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={value === o.id}
+          onClick={() => onChange(o.id)}
+          className={cn(
+            "inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors",
+            value === o.id ? "bg-card text-foreground shadow-soft" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {o.icon && <o.icon className="size-3.5" />}
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A small copy of the lock screen, so a choice can be seen before locking. */
+function LockPreview() {
+  const personal = usePersonal();
+  const { now } = useStore();
+  const photo = lockPhoto(personal, now, "thumb");
+  const name = firstName(personal.name);
+  return (
+    <div
+      className={cn(
+        "relative grid aspect-[16/10] w-full max-w-xs place-items-center overflow-hidden rounded-lg ring-1 ring-hairline",
+        photo ? "bg-neutral-900 text-white" : "bg-surface",
+      )}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element -- remote or data: photo, no optimizer wanted */}
+      {photo && <img key={photo.url} src={photo.url} alt="" className="absolute inset-0 size-full object-cover" />}
+      {photo && <div className="absolute inset-0 bg-black/25" />}
+      <div className={cn("relative text-center", photo && "drop-shadow-[0_1px_6px_oklch(0_0_0/40%)]")}>
+        <p className="font-display text-3xl leading-none tabular-nums">
+          {new Date(now).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+        </p>
+        <p className="mt-1.5 font-display text-xs">
+          {greeting(now)}
+          {name && `, ${name}`}
+        </p>
+        <div className={cn("mx-auto mt-2.5 h-5 w-24 rounded-md", photo ? "bg-black/30 ring-1 ring-white/20 backdrop-blur" : "bg-card shadow-card")} />
+      </div>
+      {photo?.author && (
+        <p className="absolute right-2 bottom-1 max-w-[70%] truncate text-[9px] text-white/70">{photo.author} · Unsplash</p>
+      )}
+    </div>
+  );
+}
+
+function PersonalPanel() {
+  const personal = usePersonal();
+  // Typed text, so a trailing space survives until the next word.
+  const [name, setName] = useState(personal.name);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const url = await shrinkPhoto(file);
+      if (!setCustomPhoto(url)) toast.error("This browser could not keep the photo. Try a smaller one.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not read this photo.");
+    }
+  };
+
+  return (
+    <Panel className="divide-y">
+      <SettingRow title="Your name" text="For greetings, like “Good morning, Thomas”. Kept on this device.">
+        <Input
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value);
+            setOwnerName(e.target.value);
+          }}
+          placeholder="First name"
+          aria-label="Your name"
+          autoComplete="given-name"
+          className="h-8 w-full sm:w-48"
+        />
+      </SettingRow>
+      <div className="space-y-4 px-5 py-4">
+        <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium">Lock screen</p>
+            <p className="text-sm text-muted-foreground">
+              {personal.background === "photos"
+                ? "A new landscape every day, from Unsplash."
+                : personal.background === "custom"
+                  ? "A photo of your own, stored on this device."
+                  : "No photo, just Clarity."}
+            </p>
+          </div>
+          <Segmented
+            label="Lock screen background"
+            value={personal.background === "custom" && !personal.custom ? "photos" : personal.background}
+            options={BACKGROUNDS}
+            onChange={(id) => (id === "custom" && !personal.custom ? fileRef.current?.click() : setLockBackground(id))}
+          />
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <LockPreview />
+          <div className="flex flex-wrap gap-2">
+            {personal.background === "photos" && (
+              <Button variant="outline" size="sm" onClick={nextLockPhoto}>
+                <Shuffle />
+                Next photo
+              </Button>
+            )}
+            {personal.background !== "plain" && (
+              <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+                <ImagePlus />
+                {personal.custom ? "Change photo…" : "Use my photo…"}
+              </Button>
+            )}
+            {personal.background === "custom" && personal.custom && (
+              <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setCustomPhoto(null)}>
+                Remove
+              </Button>
+            )}
+          </div>
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            void pick(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </Panel>
+  );
+}
+
+const PREVIEWS: { id: DisplayPrefs["preview"]; label: string }[] = [
+  { id: "summary", label: "Summary" },
+  { id: "text", label: "Message text" },
+];
+
+const LAYOUTS: { id: DisplayPrefs["layout"]; label: string }[] = [
+  { id: "split", label: "Side by side" },
+  { id: "full", label: "Full screen" },
+];
+
+function MailListPanel() {
+  const prefs = useDisplayPrefs();
+  return (
+    <Panel className="divide-y">
+      <SettingRow
+        title="Preview"
+        text="Under each subject: the gist of the conversation, or the first words of the latest mail."
+      >
+        <Segmented
+          label="Preview"
+          value={prefs.preview}
+          options={PREVIEWS}
+          onChange={(id) => setDisplayPref("preview", id)}
+        />
+      </SettingRow>
+      <SettingRow title="Layout" text="Read next to the list, or open each conversation full screen, as in Spark.">
+        <Segmented label="Layout" value={prefs.layout} options={LAYOUTS} onChange={(id) => setDisplayPref("layout", id)} />
+      </SettingRow>
+      <SettingRow
+        title="Sender photos"
+        text="Looks up a sender's Gravatar, or their company's icon. Clarity asks for them, not your browser."
+      >
+        <Switch
+          checked={prefs.senderPhotos}
+          onCheckedChange={(on) => setDisplayPref("senderPhotos", on)}
+          aria-label="Sender photos"
+        />
+      </SettingRow>
+    </Panel>
+  );
+}
+
 function GeneralSection() {
   const { theme, setTheme } = useTheme();
   const mounted = useSyncExternalStore(noop, () => true, () => false);
@@ -925,27 +1146,12 @@ function GeneralSection() {
 
   return (
     <section className="space-y-4">
-      <SectionHeader title="General" description="How Clarity Mail looks, and your session." />
+      <SectionHeader title="General" description="Who you are, how Clarity Mail looks, and your session." />
+      <PersonalPanel />
+      <MailListPanel />
       <Panel className="divide-y">
         <SettingRow title="Appearance" text="Follow macOS, or keep Clarity Mail light or dark.">
-          <div className="inline-flex rounded-lg bg-secondary p-0.5" role="radiogroup" aria-label="Appearance">
-            {THEMES.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="radio"
-                aria-checked={current === t.id}
-                onClick={() => setTheme(t.id)}
-                className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors",
-                  current === t.id ? "bg-card text-foreground shadow-soft" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <t.icon className="size-3.5" />
-                {t.label}
-              </button>
-            ))}
-          </div>
+          <Segmented label="Appearance" value={current} options={THEMES} onChange={setTheme} />
         </SettingRow>
         <SettingRow title="Sign out" text="Your mail stays stored. This only ends this session.">
           <Button
@@ -958,6 +1164,71 @@ function GeneralSection() {
             Sign out
           </Button>
         </SettingRow>
+      </Panel>
+    </section>
+  );
+}
+
+/* ---------- Updates ---------- */
+
+function UpdatesSection() {
+  const { info, checking, available } = useUpdates();
+  const { now } = useStore();
+  const latest = info?.latest;
+
+  return (
+    <section className="space-y-4">
+      <SectionHeader title="Updates" description="Which version this is, what changed, and whether a newer one is out." />
+      <Panel className="divide-y">
+        <div className="flex flex-col items-start gap-3 px-5 py-4 sm:flex-row sm:items-center">
+          <span
+            className={cn(
+              "grid size-9 shrink-0 place-items-center rounded-full",
+              available ? "bg-brand-soft text-brand" : "bg-success/12 text-success",
+            )}
+          >
+            {available ? <ArrowUpCircle className="size-[18px]" /> : <CheckCircle2 className="size-[18px]" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">
+              {available && latest ? `Version ${latest.version} is out` : `Clarity Mail ${APP_VERSION}`}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {available
+                ? `You have ${APP_VERSION}. Download the new version, then replace the app in Applications. Your mail stays.`
+                : checking && !info
+                  ? "Checking for updates…"
+                  : info?.error === "not-found"
+                    ? "Updates can't be checked: the releases repository is private or missing."
+                    : info?.error === "unreachable"
+                      ? "Couldn't reach GitHub to check for updates."
+                      : info
+                        ? `Up to date. Checked ${relativeTime(info.checkedAt, now)}.`
+                        : "Up to date."}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            {available && latest && (
+              <Button
+                variant="brand"
+                size="sm"
+                render={<a href={latest.download ?? latest.url} target="_blank" rel="noreferrer" />}
+                nativeButton={false}
+              >
+                <Download />
+                {latest.download ? "Download" : "Open release"}
+              </Button>
+            )}
+            <Button variant="outline" size="sm" disabled={checking} onClick={() => void checkForUpdates(true)}>
+              <RefreshCw className={cn(checking && "animate-spin")} />
+              Check now
+            </Button>
+          </div>
+        </div>
+      </Panel>
+      <h3 className="px-1 pt-2 text-[13px] font-semibold tracking-tight">What&apos;s new</h3>
+      <Panel>
+        <ReleaseHistory />
       </Panel>
     </section>
   );
@@ -1295,11 +1566,26 @@ function SecuritySection() {
 
 /* ---------- Page ---------- */
 
-type Section = "mailboxes" | "spaces" | "rules" | "security" | "general";
+type Section = "mailboxes" | "spaces" | "rules" | "security" | "general" | "updates";
+const SECTIONS: Section[] = ["mailboxes", "spaces", "rules", "security", "general", "updates"];
 
 export function SettingsView() {
   const { ready, accounts, spaces, rules } = useStore();
-  const [section, setSection] = useState<Section>("mailboxes");
+  // Settings#updates opens on that tab, from the update notice or the sidebar.
+  const [section, setSection] = useState<Section>(() => {
+    const hash = typeof window === "undefined" ? "" : window.location.hash.slice(1);
+    return SECTIONS.includes(hash as Section) ? (hash as Section) : "mailboxes";
+  });
+  const { available } = useUpdates();
+
+  useEffect(() => {
+    const onSection = (event: Event) => {
+      const next = (event as CustomEvent<string>).detail;
+      if (SECTIONS.includes(next as Section)) setSection(next as Section);
+    };
+    window.addEventListener(SETTINGS_SECTION_EVENT, onSection);
+    return () => window.removeEventListener(SETTINGS_SECTION_EVENT, onSection);
+  }, []);
 
   if (!ready) {
     return (
@@ -1319,6 +1605,7 @@ export function SettingsView() {
     { id: "rules", label: "Rules", count: rules.length },
     { id: "security", label: "Security" },
     { id: "general", label: "General" },
+    { id: "updates", label: "Updates" },
   ];
 
   return (
@@ -1349,6 +1636,7 @@ export function SettingsView() {
                   )}
                 >
                   {s.label}
+                  {s.id === "updates" && available && <span className="size-1.5 rounded-full bg-brand" aria-label="Update available" />}
                   {s.count !== undefined && (
                     <span className="text-xs tabular-nums text-muted-foreground/70">{s.count}</span>
                   )}
@@ -1364,7 +1652,14 @@ export function SettingsView() {
           {section === "rules" && <RulesSection />}
           {section === "security" && <SecuritySection />}
           {section === "general" && <GeneralSection />}
+          {section === "updates" && <UpdatesSection />}
         </div>
+        <footer className="pt-4 text-center text-xs text-muted-foreground/80">
+          <button type="button" onClick={() => setSection("updates")} className="hover:text-foreground">
+            Clarity Mail {APP_VERSION}
+            {APP_COMMIT && <span className="font-mono"> · {APP_COMMIT}</span>}
+          </button>
+        </footer>
       </div>
     </div>
   );

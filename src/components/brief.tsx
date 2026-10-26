@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -15,12 +14,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { SpaceIcon } from "@/components/app-shell";
+import { SearchButton, useOpenSearch, useOpenThread } from "@/components/search-dialog";
 import { SenderAvatar } from "@/components/sender-avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SpaceDot } from "@/components/space-badge";
 import { ThreadActions } from "@/components/thread-actions";
 import { greeting, plural, relativeTime } from "@/lib/format";
+import { firstName, usePersonal } from "@/lib/personal";
 import { isLowValue, PRIORITY_THRESHOLD, whyLine } from "@/lib/priority";
 import { useStore } from "@/lib/store";
 import type { ScoredThread } from "@/lib/types";
@@ -73,15 +74,6 @@ function syncedLabel(ts: number, now: number) {
   if (label === "now") return "Synced just now";
   if (/^\d+[mhd]$/.test(label)) return `Synced ${label} ago`;
   return `Synced ${label}`;
-}
-
-function useOpenThread() {
-  const router = useRouter();
-  const { select } = useStore();
-  return (t: ScoredThread) => {
-    select(t.id);
-    router.push(`/inbox/${t.space}`);
-  };
 }
 
 function SectionTitle({ id, children, action }: { id: string; children: ReactNode; action?: ReactNode }) {
@@ -245,8 +237,23 @@ function Notice({ tone = "neutral", children }: { tone?: "neutral" | "danger"; c
 
 export function Brief() {
   const store = useStore();
+  const name = firstName(usePersonal().name);
   const open = useOpenThread();
   const { scored, spaces, now, ready } = store;
+  const openSearch = useOpenSearch();
+
+  // "/" searches from the brief too, as it does in the inbox.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
+      event.preventDefault();
+      openSearch();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openSearch]);
 
   if (!ready) return <BriefSkeleton />;
 
@@ -292,9 +299,13 @@ export function Brief() {
       <div className="desktop-drag hidden h-8 in-[.desktop-app]:block" />
       <div className="mx-auto w-full max-w-4xl animate-fade-up space-y-10 px-6 py-10 md:px-10 md:py-14 in-[.desktop-app]:pt-6">
         <header className="space-y-4">
-          <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">{dateLabel}</p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">{dateLabel}</p>
+            <SearchButton className="-my-1 max-md:hidden" />
+          </div>
           <h1 className="font-display text-[2.6rem] leading-[1.05] tracking-tight md:text-5xl">
             {greeting(now)}
+            {name && `, ${name}`}
             <span className="text-brand">.</span>
           </h1>
           <p className="max-w-xl text-base leading-relaxed text-muted-foreground">

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Archive,
+  ArrowDownUp,
   BellOff,
   Check,
   CheckCircle2,
@@ -17,11 +18,13 @@ import {
   MessageCircleReply,
   Search,
   SearchX,
+  Sparkles,
   Star,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { InboxShortcuts, type Picker } from "@/components/inbox-shortcuts";
+import { SearchButton } from "@/components/search-dialog";
 import { SenderAvatar } from "@/components/sender-avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +34,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,12 +51,16 @@ import { SpaceDot } from "@/components/space-badge";
 import { useThreadCommands } from "@/components/thread-actions";
 import { ThreadView } from "@/components/thread-view";
 import { toast } from "sonner";
+import { useDisplayPrefs } from "@/lib/display";
 import { sentByMe } from "@/lib/drafts";
 import { folderOf, INBOX_FILTERS, type InboxFilter, type InboxTab } from "@/lib/folders";
 import { relativeTime } from "@/lib/format";
+import { previewOf } from "@/lib/preview";
 import { isLowValue, PRIORITY_THRESHOLD, whyLine } from "@/lib/priority";
+import { matchesSearch } from "@/lib/search";
+import { setSortOrder, SORT_ORDERS, sortThreads, useSortOrder, type SortOrder } from "@/lib/sort";
 import { useStore } from "@/lib/store";
-import type { Message, ScoredThread } from "@/lib/types";
+import type { ScoredThread } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export type { InboxTab } from "@/lib/folders";
@@ -171,6 +187,8 @@ function ThreadRow({
   const face = fromMe ? (other?.from ?? last.from) : last.from;
   const why = whyLine(thread.reasons);
   const count = thread.messages.length;
+  const prefs = useDisplayPrefs();
+  const preview = previewOf(thread, prefs.preview);
 
   return (
     <li className="group/row relative">
@@ -230,7 +248,16 @@ function ThreadRow({
           >
             {thread.subject || "(no subject)"}
           </span>
-          <p className="line-clamp-1 text-[12.5px] leading-snug text-muted-foreground">{thread.snippet}</p>
+          <p
+            className={cn(
+              "text-[12.5px] leading-snug text-muted-foreground",
+              // A summary gets two lines: cut after one it rarely says anything.
+              preview.text === thread.snippet ? "line-clamp-1" : "line-clamp-2",
+            )}
+          >
+            {preview.ai && <Sparkles className="mr-1 inline size-3 -translate-y-px text-brand" aria-label="Summary" />}
+            {preview.text}
+          </p>
           {(why || (showSpace && space)) && (
             <div className="mt-1 flex min-w-0 items-center gap-1.5">
               {showSpace && space && (
@@ -344,7 +371,7 @@ function SelectionBar({
   const buttons = useBulkButtons(threads, onClear, setPicker);
   const all = threads.length === total;
   return (
-    <div className="flex animate-fade-up items-center gap-1 rounded-xl bg-card px-1.5 py-1 shadow-card">
+    <div className="pointer-events-auto flex w-full max-w-[24rem] animate-fade-up items-center gap-1 rounded-2xl border bg-card/95 px-1.5 py-1 shadow-lg backdrop-blur">
       <Tooltip>
         <TooltipTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Clear selection" onClick={onClear} />}>
           <X />
@@ -433,10 +460,6 @@ function SelectionPanel({
   );
 }
 
-// Lower-cased search text per thread, keyed on its messages array, which only changes
-// when the mailbox is reloaded.
-const haystacks = new WeakMap<Message[], string>();
-
 function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint?: string }) {
   return (
     <div className="flex animate-fade-up flex-col items-center gap-3 px-6 py-16 text-center">
@@ -469,7 +492,11 @@ export function InboxView({
   const [picker, setPicker] = useState<Picker>(null);
   const [query, setQuery] = useState("");
   const [emptying, setEmptying] = useState(false);
+  const sortOrder = useSortOrder();
+  const { layout } = useDisplayPrefs();
   const isDesktop = useIsDesktop();
+  // Spark-style: the list alone, and a conversation opens over it, full width.
+  const full = isDesktop && layout === "full";
   const searchRef = useRef<HTMLInputElement>(null);
   const openedId = useRef<string | null>(null);
 
@@ -488,19 +515,10 @@ export function InboxView({
   const deferredQuery = useDeferredValue(query);
   const visible = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase();
-    const list = filterThreads(inSpace, tab);
+    const list = sortThreads(filterThreads(inSpace, tab), sortOrder);
     if (!q) return list;
-    return list.filter((t) => {
-      let text = haystacks.get(t.messages);
-      if (text === undefined) {
-        text = [t.subject, t.snippet, ...t.messages.map((m) => `${m.from.name} ${m.from.email} ${m.body}`)]
-          .join(" ")
-          .toLowerCase();
-        haystacks.set(t.messages, text);
-      }
-      return text.includes(q);
-    });
-  }, [inSpace, tab, deferredQuery]);
+    return list.filter((t) => matchesSearch(t, q));
+  }, [inSpace, tab, deferredQuery, sortOrder]);
 
   const selected = inSpace.find((t) => t.id === selectedId) ?? null;
   // Only what the list shows counts: a ticked thread that was archived or filtered out drops out.
@@ -605,9 +623,19 @@ export function InboxView({
   }
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
-      <section className="flex h-full min-h-0 w-full min-w-0 flex-col border-r bg-background lg:w-[24rem] lg:shrink-0 xl:w-[26rem]">
-        <div className="desktop-drag shrink-0 space-y-3.5 px-4 pt-6 pb-3 in-[.desktop-app]:pt-10">
+    <div className="relative flex h-full min-h-0 overflow-hidden">
+      <section
+        className={cn(
+          "relative flex h-full min-h-0 w-full min-w-0 flex-col bg-background",
+          !full && "border-r lg:w-[24rem] lg:shrink-0 xl:w-[26rem]",
+        )}
+      >
+        <div
+          className={cn(
+            "desktop-drag shrink-0 space-y-3.5 px-4 pt-6 pb-3 in-[.desktop-app]:pt-10",
+            full && "mx-auto w-full max-w-5xl lg:px-8",
+          )}
+        >
           <div className="flex items-start gap-2 px-1">
             <div className="min-w-0 flex-1">
               <h1 className="flex items-center gap-2 truncate text-xl font-semibold tracking-tight">
@@ -641,6 +669,42 @@ export function InboxView({
                 <TooltipContent>Delete everything in {folder?.label} forever</TooltipContent>
               </Tooltip>
             )}
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Sort"
+                          className={cn(sortOrder !== "smart" && "text-brand hover:text-brand")}
+                        />
+                      }
+                    />
+                  }
+                >
+                  <ArrowDownUp />
+                </TooltipTrigger>
+                <TooltipContent>
+                  Sort: {SORT_ORDERS.find((o) => o.id === sortOrder)?.label}
+                </TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={sortOrder} onValueChange={(value) => setSortOrder(value as SortOrder)}>
+                    {SORT_ORDERS.map((o) => (
+                      <DropdownMenuRadioItem key={o.id} value={o.id}>
+                        {o.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <SearchButton />
             <InboxShortcuts
               visible={visible}
               selected={selected}
@@ -704,18 +768,16 @@ export function InboxView({
             })}
           </div>
           )}
-          {checked.length > 0 && (
-            <SelectionBar
-              threads={checked}
-              total={visible.length}
-              onAll={() => setCheckedIds(new Set(visible.map((t) => t.id)))}
-              onClear={clearChecked}
-              setPicker={setPicker}
-            />
-          )}
         </div>
 
-        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
+        <div
+          className={cn(
+            "scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3",
+            full && "lg:px-6 [&>*]:mx-auto [&>*]:max-w-5xl",
+            // Room under the last row so the floating bar never hides it.
+            checked.length > 0 && "pb-20",
+          )}
+        >
           {!ready ? (
             <div className="space-y-1 px-2 pt-1">
               {Array.from({ length: 7 }).map((_, i) => (
@@ -752,9 +814,29 @@ export function InboxView({
             </ul>
           )}
         </div>
+        {checked.length > 0 && (
+          // Floats over the list instead of pushing it down, so nothing moves on the first tick.
+          <div className="pointer-events-none absolute inset-x-3 bottom-4 z-10 flex justify-center">
+            <SelectionBar
+              threads={checked}
+              total={visible.length}
+              onAll={() => setCheckedIds(new Set(visible.map((t) => t.id)))}
+              onClear={clearChecked}
+              setPicker={setPicker}
+            />
+          </div>
+        )}
       </section>
 
-      {isDesktop ? (
+      {full ? (
+        // Over the list rather than instead of it, so the list keeps its scroll for the way back.
+        selected &&
+        checked.length <= 1 && (
+          <section className="absolute inset-0 z-20 flex min-h-0 flex-col overflow-hidden bg-surface">
+            <ThreadView thread={selected} onBack={() => select(null)} />
+          </section>
+        )
+      ) : isDesktop ? (
         <section className="hidden h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-surface lg:flex lg:flex-col">
           {checked.length > 1 ? (
             <SelectionPanel threads={checked} onClear={clearChecked} setPicker={setPicker} />
